@@ -1,0 +1,42 @@
+{
+    "1": {
+        "1": [
+            "spinning_bottle",
+            "ice_fishing"
+        ],
+        "2": [
+            "bart",
+            "mountain_mining"
+        ]
+    },
+    "2": {
+        "1": [
+            "spinning_bottle",
+            "mountain_mining"
+        ],
+        "2": [
+            "ice_fishing",
+            "bart"
+        ]
+    },
+    "3": {
+        "1": [
+            "ice_fishing",
+            "bart"
+        ],
+        "2": [
+            "spinning_bottle",
+            "mountain_mining"
+        ]
+    },
+    "4": {
+        "1": [
+            "ice_fishing",
+            "bart"
+        ],
+        "2": [
+            "spinning_bottle",
+            "mountain_mining"
+        ]
+    }
+}

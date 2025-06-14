@@ -1,6 +1,7 @@
 """
 Session Manager UI for Risk Tasks Client - Researcher Interface
 Handles session monitoring, data export, and session management.
+Now includes experiment information and filtering.
 """
 
 import tkinter as tk
@@ -25,6 +26,7 @@ class SessionManager(ctk.CTkFrame):
         self.db_manager = db_manager
         self.task_scheduler = task_scheduler
         self.current_session_id = None
+        self.current_experiment_id = None
 
         # Setup UI
         self.setup_ui()
@@ -64,7 +66,7 @@ class SessionManager(ctk.CTkFrame):
 
     def create_active_sessions_tab(self):
         """Create the active sessions monitoring tab."""
-        # Header with refresh button
+        # Header with refresh button and experiment filter
         header_frame = ctk.CTkFrame(self.active_tab)
         header_frame.pack(fill="x", pady=(10, 10))
 
@@ -83,6 +85,20 @@ class SessionManager(ctk.CTkFrame):
         )
         refresh_btn.pack(side="right")
 
+        # Experiment filter
+        self.experiment_filter_var = tk.StringVar(value="All Experiments")
+        experiment_filter = ctk.CTkOptionMenu(
+            header_frame,
+            variable=self.experiment_filter_var,
+            values=["All Experiments"],
+            command=self.on_experiment_filter_changed,
+            width=200
+        )
+        experiment_filter.pack(side="right", padx=10)
+
+        filter_label = ctk.CTkLabel(header_frame, text="Experiment:")
+        filter_label.pack(side="right")
+
         # Session statistics
         stats_frame = ctk.CTkFrame(self.active_tab)
         stats_frame.pack(fill="x", pady=10)
@@ -91,7 +107,8 @@ class SessionManager(ctk.CTkFrame):
         stats_data = [
             ('active', 'Active Sessions: 0'),
             ('overdue', 'Overdue: 0'),
-            ('today', 'Started Today: 0')
+            ('today', 'Started Today: 0'),
+            ('experiment', 'In Experiments: 0')
         ]
 
         for key, text in stats_data:
@@ -103,8 +120,8 @@ class SessionManager(ctk.CTkFrame):
         list_frame = ctk.CTkFrame(self.active_tab)
         list_frame.pack(fill="both", expand=True, pady=10)
 
-        # Create Treeview for active sessions
-        columns = ("Participant", "Session", "Started", "Duration", "Progress", "Status")
+        # Create Treeview for active sessions with experiment column
+        columns = ("Participant", "Session", "Experiment", "Started", "Duration", "Progress", "Status")
         self.active_tree = ttk.Treeview(
             list_frame,
             columns=columns,
@@ -115,17 +132,19 @@ class SessionManager(ctk.CTkFrame):
         # Configure columns
         self.active_tree.heading("Participant", text="Participant")
         self.active_tree.heading("Session", text="Session")
+        self.active_tree.heading("Experiment", text="Experiment")
         self.active_tree.heading("Started", text="Started")
         self.active_tree.heading("Duration", text="Duration")
         self.active_tree.heading("Progress", text="Progress")
         self.active_tree.heading("Status", text="Status")
 
-        self.active_tree.column("Participant", width=120)
-        self.active_tree.column("Session", width=80)
-        self.active_tree.column("Started", width=150)
-        self.active_tree.column("Duration", width=100)
-        self.active_tree.column("Progress", width=150)
-        self.active_tree.column("Status", width=100)
+        self.active_tree.column("Participant", width=100)
+        self.active_tree.column("Session", width=70)
+        self.active_tree.column("Experiment", width=150)
+        self.active_tree.column("Started", width=120)
+        self.active_tree.column("Duration", width=80)
+        self.active_tree.column("Progress", width=120)
+        self.active_tree.column("Status", width=80)
 
         # Scrollbar
         scrollbar = ttk.Scrollbar(
@@ -161,6 +180,15 @@ class SessionManager(ctk.CTkFrame):
             state="disabled"
         )
         self.export_session_btn.pack(side="left", padx=5)
+
+        self.export_experiment_btn = ctk.CTkButton(
+            action_frame,
+            text="Export Experiment Data",
+            command=self.export_experiment_data,
+            state="disabled",
+            fg_color="purple"
+        )
+        self.export_experiment_btn.pack(side="left", padx=5)
 
         self.mark_complete_btn = ctk.CTkButton(
             action_frame,
@@ -212,9 +240,23 @@ class SessionManager(ctk.CTkFrame):
         )
         status_filter.grid(row=0, column=3, padx=5, pady=5)
 
+        # Experiment filter for history
+        exp_label = ctk.CTkLabel(filter_frame, text="Experiment:")
+        exp_label.grid(row=0, column=4, padx=5, pady=5, sticky="e")
+
+        self.history_experiment_var = tk.StringVar(value="All Experiments")
+        self.history_experiment_filter = ctk.CTkOptionMenu(
+            filter_frame,
+            variable=self.history_experiment_var,
+            values=["All Experiments"],
+            command=self.refresh_history,
+            width=200
+        )
+        self.history_experiment_filter.grid(row=0, column=5, padx=5, pady=5)
+
         # Search
         search_label = ctk.CTkLabel(filter_frame, text="Search:")
-        search_label.grid(row=0, column=4, padx=5, pady=5, sticky="e")
+        search_label.grid(row=0, column=6, padx=5, pady=5, sticky="e")
 
         self.search_var = tk.StringVar()
         search_entry = ctk.CTkEntry(
@@ -222,14 +264,14 @@ class SessionManager(ctk.CTkFrame):
             textvariable=self.search_var,
             placeholder_text="Participant code..."
         )
-        search_entry.grid(row=0, column=5, padx=5, pady=5)
+        search_entry.grid(row=0, column=7, padx=5, pady=5)
         search_entry.bind("<KeyRelease>", lambda e: self.refresh_history())
 
-        # History list
+        # History list with experiment column
         history_frame = ctk.CTkFrame(self.history_tab)
         history_frame.pack(fill="both", expand=True, pady=10)
 
-        columns = ("ID", "Participant", "Session", "Date", "Duration", "Tasks", "Trials", "Status")
+        columns = ("ID", "Participant", "Session", "Experiment", "Date", "Duration", "Tasks", "Trials", "Status")
         self.history_tree = ttk.Treeview(
             history_frame,
             columns=columns,
@@ -242,6 +284,8 @@ class SessionManager(ctk.CTkFrame):
             self.history_tree.heading(col, text=col)
             if col == "ID":
                 self.history_tree.column(col, width=50)
+            elif col == "Experiment":
+                self.history_tree.column(col, width=150)
             elif col == "Tasks":
                 self.history_tree.column(col, width=200)
             else:
@@ -276,8 +320,41 @@ class SessionManager(ctk.CTkFrame):
         )
         export_filtered_btn.pack(side="left", padx=5)
 
+        export_by_experiment_btn = ctk.CTkButton(
+            export_frame,
+            text="Export by Experiment",
+            command=self.export_by_experiment,
+            fg_color="purple"
+        )
+        export_by_experiment_btn.pack(side="left", padx=5)
+
     def create_analytics_tab(self):
         """Create the session analytics tab."""
+        # Analytics header with experiment selector
+        header_frame = ctk.CTkFrame(self.analytics_tab)
+        header_frame.pack(fill="x", pady=10)
+
+        analytics_label = ctk.CTkLabel(
+            header_frame,
+            text="Session Analytics",
+            font=ctk.CTkFont(size=18, weight="bold")
+        )
+        analytics_label.pack(side="left")
+
+        # Experiment selector for analytics
+        self.analytics_experiment_var = tk.StringVar(value="All Experiments")
+        self.analytics_experiment_menu = ctk.CTkOptionMenu(
+            header_frame,
+            variable=self.analytics_experiment_var,
+            values=["All Experiments"],
+            command=self.refresh_analytics,
+            width=200
+        )
+        self.analytics_experiment_menu.pack(side="right", padx=10)
+
+        exp_label = ctk.CTkLabel(header_frame, text="Experiment:")
+        exp_label.pack(side="right")
+
         # Summary statistics
         summary_frame = ctk.CTkFrame(self.analytics_tab)
         summary_frame.pack(fill="x", pady=10)
@@ -285,7 +362,7 @@ class SessionManager(ctk.CTkFrame):
         summary_label = ctk.CTkLabel(
             summary_frame,
             text="Session Statistics",
-            font=ctk.CTkFont(size=18, weight="bold")
+            font=ctk.CTkFont(size=16, weight="bold")
         )
         summary_label.pack(pady=10)
 
@@ -306,6 +383,20 @@ class SessionManager(ctk.CTkFrame):
         self.rates_text = ctk.CTkTextbox(rates_frame, height=150)
         self.rates_text.pack(fill="x", padx=20, pady=10)
 
+        # Experiment-specific analytics
+        exp_analytics_frame = ctk.CTkFrame(self.analytics_tab)
+        exp_analytics_frame.pack(fill="x", pady=10)
+
+        exp_analytics_label = ctk.CTkLabel(
+            exp_analytics_frame,
+            text="Experiment Analytics",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        exp_analytics_label.pack(pady=10)
+
+        self.exp_analytics_text = ctk.CTkTextbox(exp_analytics_frame, height=150)
+        self.exp_analytics_text.pack(fill="x", padx=20, pady=10)
+
         # Refresh button
         refresh_analytics_btn = ctk.CTkButton(
             self.analytics_tab,
@@ -317,9 +408,36 @@ class SessionManager(ctk.CTkFrame):
 
     def refresh(self):
         """Refresh all data."""
+        self.load_experiments()
         self.refresh_active_sessions()
         self.refresh_history()
         self.refresh_analytics()
+
+    def load_experiments(self):
+        """Load experiments for filters."""
+        experiments = self.db_manager.get_all_experiments()
+
+        experiment_names = ["All Experiments"]
+        self.experiment_map = {}
+
+        for exp in experiments:
+            name = f"{exp['name']} ({exp['code']})"
+            experiment_names.append(name)
+            self.experiment_map[name] = exp['id']
+
+        # Update all experiment filters
+        self.experiment_filter_var.set("All Experiments")
+        self.experiment_filter_var.configure(values=experiment_names)
+
+        self.history_experiment_var.set("All Experiments")
+        self.history_experiment_filter.configure(values=experiment_names)
+
+        self.analytics_experiment_var.set("All Experiments")
+        self.analytics_experiment_menu.configure(values=experiment_names)
+
+    def on_experiment_filter_changed(self, choice):
+        """Handle experiment filter change."""
+        self.refresh_active_sessions()
 
     def refresh_active_sessions(self):
         """Refresh the active sessions list."""
@@ -330,10 +448,17 @@ class SessionManager(ctk.CTkFrame):
         # Get pending sessions
         pending_sessions = self.db_manager.get_pending_sessions()
 
+        # Apply experiment filter
+        experiment_filter = self.experiment_filter_var.get()
+        if experiment_filter != "All Experiments" and experiment_filter in self.experiment_map:
+            filter_exp_id = self.experiment_map[experiment_filter]
+            pending_sessions = [s for s in pending_sessions if s.get('experiment_id') == filter_exp_id]
+
         # Update statistics
         active_count = len(pending_sessions)
         overdue_count = 0
         today_count = 0
+        experiment_count = 0
 
         today = datetime.now().date()
 
@@ -349,6 +474,10 @@ class SessionManager(ctk.CTkFrame):
             is_overdue = days_old > 14
             if is_overdue:
                 overdue_count += 1
+
+            # Count experiment sessions
+            if session.get('experiment_id'):
+                experiment_count += 1
 
             # Calculate duration if session has start time
             duration = "N/A"
@@ -377,11 +506,12 @@ class SessionManager(ctk.CTkFrame):
             # Determine status
             status = "Overdue" if is_overdue else "Active"
 
-            # Format tasks
-            tasks_str = ", ".join([
-                TaskType.get_display_name(TaskType(task))
-                for task in session['tasks_assigned']
-            ])
+            # Get experiment name
+            experiment_name = "Standard"
+            if session.get('experiment_id'):
+                experiment = self.db_manager.get_experiment(session['experiment_id'])
+                if experiment:
+                    experiment_name = experiment['name']
 
             # Insert into tree
             self.active_tree.insert(
@@ -390,18 +520,20 @@ class SessionManager(ctk.CTkFrame):
                 values=(
                     session['participant_code'],
                     f"Session {session['session_number']}",
+                    experiment_name,
                     session_date.strftime("%Y-%m-%d %H:%M"),
                     duration,
                     progress,
                     status
                 ),
-                tags=(session['id'], "overdue" if is_overdue else "normal")
+                tags=(session['id'], "overdue" if is_overdue else "normal", session.get('experiment_id', 0))
             )
 
         # Update statistics labels
         self.stats_labels['active'].configure(text=f"Active Sessions: {active_count}")
         self.stats_labels['overdue'].configure(text=f"Overdue: {overdue_count}")
         self.stats_labels['today'].configure(text=f"Started Today: {today_count}")
+        self.stats_labels['experiment'].configure(text=f"In Experiments: {experiment_count}")
 
         # Color code overdue sessions
         self.active_tree.tag_configure("overdue", foreground="red")
@@ -419,6 +551,7 @@ class SessionManager(ctk.CTkFrame):
         search_term = self.search_var.get().lower()
         status_filter = self.status_filter_var.get()
         date_filter = self.date_filter_var.get()
+        experiment_filter = self.history_experiment_var.get()
 
         # Determine date range
         start_date = None
@@ -445,6 +578,12 @@ class SessionManager(ctk.CTkFrame):
                 # Apply date filter
                 if start_date and session_date < start_date:
                     continue
+
+                # Apply experiment filter
+                if experiment_filter != "All Experiments" and experiment_filter in self.experiment_map:
+                    filter_exp_id = self.experiment_map[experiment_filter]
+                    if session.get('experiment_id') != filter_exp_id:
+                        continue
 
                 # Apply status filter
                 if status_filter == "Completed" and not session['completed']:
@@ -481,6 +620,13 @@ class SessionManager(ctk.CTkFrame):
                 else:
                     status = "Incomplete"
 
+                # Get experiment name
+                experiment_name = "Standard"
+                if session.get('experiment_id'):
+                    experiment = self.db_manager.get_experiment(session['experiment_id'])
+                    if experiment:
+                        experiment_name = experiment['name']
+
                 # Insert into tree
                 self.history_tree.insert(
                     "",
@@ -489,13 +635,14 @@ class SessionManager(ctk.CTkFrame):
                         session['id'],
                         participant['participant_code'],
                         f"Session {session['session_number']}",
+                        experiment_name,
                         session_date.strftime("%Y-%m-%d %H:%M"),
                         duration,
                         tasks_str,
                         trial_count,
                         status
                     ),
-                    tags=(status.lower(),)
+                    tags=(status.lower(), session.get('experiment_id', 0))
                 )
 
         # Color code by status
@@ -508,6 +655,12 @@ class SessionManager(ctk.CTkFrame):
         # Get statistics
         stats = self.db_manager.get_statistics()
         task_stats = self.db_manager.get_task_statistics()
+
+        # Apply experiment filter
+        experiment_filter = self.analytics_experiment_var.get()
+        filter_exp_id = None
+        if experiment_filter != "All Experiments" and experiment_filter in self.experiment_map:
+            filter_exp_id = self.experiment_map[experiment_filter]
 
         # Summary statistics
         summary_lines = [
@@ -523,6 +676,11 @@ class SessionManager(ctk.CTkFrame):
         # Calculate average session duration
         all_sessions = []
         participants = self.db_manager.get_all_participants()
+
+        # Filter participants by experiment if needed
+        if filter_exp_id:
+            participants = [p for p in participants if p.get('experiment_id') == filter_exp_id]
+
         for p in participants:
             sessions = self.db_manager.get_participant_sessions(p['id'])
             all_sessions.extend(sessions)
@@ -568,22 +726,72 @@ class SessionManager(ctk.CTkFrame):
         self.rates_text.delete("1.0", tk.END)
         self.rates_text.insert("1.0", "\n".join(rates_lines))
 
+        # Experiment-specific analytics
+        exp_lines = ["=== Experiment Analytics ===\n"]
+
+        if filter_exp_id:
+            # Show specific experiment stats
+            experiment = self.db_manager.get_experiment(filter_exp_id)
+            if experiment:
+                exp_stats = self.db_manager.get_experiment_statistics(filter_exp_id)
+
+                exp_lines.append(f"Experiment: {experiment['name']}")
+                exp_lines.append(f"Code: {experiment['code']}")
+                exp_lines.append(f"Sessions: {experiment['num_sessions']}")
+                exp_lines.append(f"\nEnrollment Statistics:")
+                exp_lines.append(f"  Total Enrolled: {exp_stats['total_enrolled']}")
+                exp_lines.append(f"  Sessions Completed: {exp_stats['total_sessions_completed']}")
+                exp_lines.append(f"  Total Trials: {exp_stats['total_trials']}")
+                exp_lines.append(f"  Average Progress: {exp_stats['average_progress']:.1%}")
+        else:
+            # Show summary of all experiments
+            experiments = self.db_manager.get_all_experiments()
+
+            exp_lines.append(f"Total Experiments: {len(experiments)}")
+            exp_lines.append(f"Active Experiments: {len([e for e in experiments if e['active']])}")
+
+            total_enrolled = 0
+            total_completed = 0
+
+            for exp in experiments:
+                exp_stats = self.db_manager.get_experiment_statistics(exp['id'])
+                total_enrolled += exp_stats['total_enrolled']
+                total_completed += exp_stats['total_sessions_completed']
+
+            exp_lines.append(f"\nOverall Experiment Statistics:")
+            exp_lines.append(f"  Total Participants Enrolled: {total_enrolled}")
+            exp_lines.append(f"  Total Sessions Completed: {total_completed}")
+            exp_lines.append(f"  Average Completion Rate: {total_completed / max(1, total_enrolled) * 100:.1f}%")
+
+        # Update experiment analytics text
+        self.exp_analytics_text.delete("1.0", tk.END)
+        self.exp_analytics_text.insert("1.0", "\n".join(exp_lines))
+
     def on_active_session_select(self, event):
         """Handle selection of an active session."""
         selection = self.active_tree.selection()
         if selection:
             item = self.active_tree.item(selection[0])
-            self.current_session_id = item['tags'][0]
+            tags = item['tags']
+            self.current_session_id = tags[0]
+            self.current_experiment_id = tags[2] if len(tags) > 2 and tags[2] != 0 else None
 
             # Enable action buttons
             self.view_details_btn.configure(state="normal")
             self.export_session_btn.configure(state="normal")
             self.mark_complete_btn.configure(state="normal")
             self.send_reminder_btn.configure(state="normal")
+
+            # Enable experiment export if session is part of an experiment
+            if self.current_experiment_id:
+                self.export_experiment_btn.configure(state="normal")
+            else:
+                self.export_experiment_btn.configure(state="disabled")
         else:
             # Disable action buttons
             self.view_details_btn.configure(state="disabled")
             self.export_session_btn.configure(state="disabled")
+            self.export_experiment_btn.configure(state="disabled")
             self.mark_complete_btn.configure(state="disabled")
             self.send_reminder_btn.configure(state="disabled")
 
@@ -609,7 +817,7 @@ class SessionManager(ctk.CTkFrame):
         # Create details window
         details_window = ctk.CTkToplevel(self)
         details_window.title(f"Session Details - {session['participant_code']} Session {session['session_number']}")
-        details_window.geometry("800x600")
+        details_window.geometry("800x700")
 
         # Session info
         info_frame = ctk.CTkFrame(details_window)
@@ -623,7 +831,7 @@ class SessionManager(ctk.CTkFrame):
         info_label.pack(pady=10)
 
         # Details text
-        details_text = ctk.CTkTextbox(info_frame, height=150)
+        details_text = ctk.CTkTextbox(info_frame, height=200)
         details_text.pack(fill="x", pady=10)
 
         session_date = datetime.fromisoformat(session['session_date'])
@@ -635,6 +843,15 @@ class SessionManager(ctk.CTkFrame):
             f"Tasks Assigned: {', '.join([TaskType.get_display_name(TaskType(t)) for t in session['tasks_assigned']])}",
             f"Total Trials Recorded: {len(trials)}"
         ]
+
+        # Add experiment info if applicable
+        if session.get('experiment_id'):
+            experiment = self.db_manager.get_experiment(session['experiment_id'])
+            if experiment:
+                details_lines.append(f"\nExperiment Information:")
+                details_lines.append(f"  Name: {experiment['name']}")
+                details_lines.append(f"  Code: {experiment['code']}")
+                details_lines.append(f"  Session {session['session_number']} of {experiment['num_sessions']}")
 
         details_text.insert("1.0", "\n".join(details_lines))
         details_text.configure(state="disabled")
@@ -651,7 +868,7 @@ class SessionManager(ctk.CTkFrame):
         trials_label.pack(pady=10)
 
         # Create tree for trials
-        columns = ("Task", "Trials", "Avg Risk", "Total Points", "Success Rate")
+        columns = ("Task", "Trials", "Avg Risk", "Total Points", "Success Rate", "Config")
         trials_tree = ttk.Treeview(
             trials_frame,
             columns=columns,
@@ -661,7 +878,7 @@ class SessionManager(ctk.CTkFrame):
 
         for col in columns:
             trials_tree.heading(col, text=col)
-            trials_tree.column(col, width=150)
+            trials_tree.column(col, width=130)
 
         trials_tree.pack(fill="both", expand=True, pady=10)
 
@@ -685,6 +902,15 @@ class SessionManager(ctk.CTkFrame):
 
         # Add to tree
         for task in session['tasks_assigned']:
+            # Check for custom config
+            config_status = "Default"
+            if session.get('experiment_session_id'):
+                exp_tasks = self.db_manager.get_experiment_session_tasks(session['experiment_session_id'])
+                for exp_task in exp_tasks:
+                    if exp_task['task_type'] == task and exp_task.get('task_config'):
+                        config_status = "Custom"
+                        break
+
             if task in task_data:
                 data = task_data[task]
                 avg_risk = data['total_risk'] / data['count']
@@ -698,7 +924,8 @@ class SessionManager(ctk.CTkFrame):
                         f"{data['count']}/30",
                         f"{avg_risk:.3f}",
                         data['total_points'],
-                        f"{success_rate:.1f}%"
+                        f"{success_rate:.1f}%",
+                        config_status
                     )
                 )
             else:
@@ -710,7 +937,8 @@ class SessionManager(ctk.CTkFrame):
                         "0/30",
                         "N/A",
                         "0",
-                        "N/A"
+                        "N/A",
+                        config_status
                     )
                 )
 
@@ -744,7 +972,7 @@ class SessionManager(ctk.CTkFrame):
             try:
                 with open(filename, 'w', newline='') as f:
                     fieldnames = ['session_id', 'task_name', 'trial_number', 'risk_level',
-                                  'points_earned', 'outcome', 'reaction_time', 'timestamp']
+                                  'points_earned', 'outcome', 'reaction_time', 'timestamp', 'additional_data']
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
 
@@ -757,10 +985,63 @@ class SessionManager(ctk.CTkFrame):
                             'points_earned': trial['points_earned'],
                             'outcome': trial['outcome'],
                             'reaction_time': trial['reaction_time'],
-                            'timestamp': trial['timestamp']
+                            'timestamp': trial['timestamp'],
+                            'additional_data': json.dumps(trial.get('additional_data', {}))
                         })
 
                 messagebox.showinfo("Success", f"Session data exported to {filename}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to export data: {e}")
+
+    def export_experiment_data(self):
+        """Export all data for the experiment of the selected session."""
+        if not self.current_experiment_id:
+            messagebox.showwarning("No Experiment", "This session is not part of an experiment.")
+            return
+
+        # Get experiment data
+        experiment_data = self.db_manager.export_experiment_data(self.current_experiment_id)
+
+        if not experiment_data:
+            messagebox.showwarning("No Data", "No data found for this experiment.")
+            return
+
+        # Ask for file location
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+
+        if filename:
+            try:
+                if filename.endswith('.xlsx'):
+                    # Export to Excel with multiple sheets
+                    with pd.ExcelWriter(filename) as writer:
+                        # Experiment info sheet
+                        exp_info = pd.DataFrame([experiment_data['experiment']])
+                        exp_info.to_excel(writer, sheet_name='Experiment Info', index=False)
+
+                        # Participants sheet
+                        if experiment_data['participants']:
+                            participants_df = pd.DataFrame(experiment_data['participants'])
+                            participants_df.to_excel(writer, sheet_name='Participants', index=False)
+
+                        # Sessions sheet
+                        if experiment_data['sessions']:
+                            sessions_df = pd.DataFrame(experiment_data['sessions'])
+                            sessions_df.to_excel(writer, sheet_name='Sessions', index=False)
+
+                        # Trials sheet
+                        if experiment_data['trials']:
+                            trials_df = pd.DataFrame(experiment_data['trials'])
+                            trials_df.to_excel(writer, sheet_name='Trials', index=False)
+
+                else:
+                    # Export as JSON
+                    with open(filename, 'w') as f:
+                        json.dump(experiment_data, f, indent=2)
+
+                messagebox.showinfo("Success", f"Experiment data exported to {filename}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export data: {e}")
 
@@ -818,6 +1099,14 @@ class SessionManager(ctk.CTkFrame):
                     sessions = self.db_manager.get_participant_sessions(participant['id'])
                     for session in sessions:
                         session['participant_code'] = participant['participant_code']
+
+                        # Add experiment name
+                        if session.get('experiment_id'):
+                            experiment = self.db_manager.get_experiment(session['experiment_id'])
+                            session['experiment_name'] = experiment['name'] if experiment else 'Unknown'
+                        else:
+                            session['experiment_name'] = 'Standard'
+
                         all_sessions.append(session)
 
                 # Create DataFrame
@@ -858,7 +1147,7 @@ class SessionManager(ctk.CTkFrame):
                     writer = csv.writer(f)
 
                     # Write headers
-                    headers = ["Session ID", "Participant", "Session", "Date",
+                    headers = ["Session ID", "Participant", "Session", "Experiment", "Date",
                               "Duration", "Tasks", "Trials", "Status"]
                     writer.writerow(headers)
 
@@ -871,3 +1160,104 @@ class SessionManager(ctk.CTkFrame):
 
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export data: {e}")
+
+    def export_by_experiment(self):
+        """Export session data grouped by experiment."""
+        # Ask user to select an experiment
+        experiments = self.db_manager.get_all_experiments()
+
+        if not experiments:
+            messagebox.showinfo("No Experiments", "No experiments found.")
+            return
+
+        # Create selection dialog
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Select Experiment")
+        dialog.geometry("400x300")
+
+        label = ctk.CTkLabel(
+            dialog,
+            text="Select experiment to export:",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        label.pack(pady=20)
+
+        # Experiment listbox
+        listbox_frame = ctk.CTkFrame(dialog)
+        listbox_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        listbox = tk.Listbox(listbox_frame, selectmode="single")
+        listbox.pack(fill="both", expand=True)
+
+        # Add experiments to listbox
+        for exp in experiments:
+            listbox.insert(tk.END, f"{exp['name']} ({exp['code']})")
+
+        def export_selected():
+            selection = listbox.curselection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select an experiment.")
+                return
+
+            selected_exp = experiments[selection[0]]
+            dialog.destroy()
+
+            # Export the selected experiment data
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx"), ("JSON files", "*.json"), ("All files", "*.*")],
+                initialfile=f"experiment_{selected_exp['code']}_data"
+            )
+
+            if filename:
+                try:
+                    experiment_data = self.db_manager.export_experiment_data(selected_exp['id'])
+
+                    if filename.endswith('.xlsx'):
+                        # Export to Excel
+                        with pd.ExcelWriter(filename) as writer:
+                            # Experiment info
+                            exp_df = pd.DataFrame([experiment_data['experiment']])
+                            exp_df.to_excel(writer, sheet_name='Experiment', index=False)
+
+                            # Participants
+                            if experiment_data['participants']:
+                                part_df = pd.DataFrame(experiment_data['participants'])
+                                part_df.to_excel(writer, sheet_name='Participants', index=False)
+
+                            # Sessions
+                            if experiment_data['sessions']:
+                                sess_df = pd.DataFrame(experiment_data['sessions'])
+                                sess_df.to_excel(writer, sheet_name='Sessions', index=False)
+
+                            # Trials
+                            if experiment_data['trials']:
+                                trials_df = pd.DataFrame(experiment_data['trials'])
+                                trials_df.to_excel(writer, sheet_name='Trials', index=False)
+
+                    else:
+                        # Export as JSON
+                        with open(filename, 'w') as f:
+                            json.dump(experiment_data, f, indent=2)
+
+                    messagebox.showinfo("Success", f"Experiment data exported to {filename}")
+
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to export data: {e}")
+
+        # Export button
+        export_btn = ctk.CTkButton(
+            dialog,
+            text="Export Selected",
+            command=export_selected
+        )
+        export_btn.pack(pady=10)
+
+        # Cancel button
+        cancel_btn = ctk.CTkButton(
+            dialog,
+            text="Cancel",
+            command=dialog.destroy,
+            fg_color="gray"
+        )
+        cancel_btn.pack(pady=5)

@@ -1,16 +1,18 @@
 """
 Task Scheduler for Risk Tasks Client
 Handles random task assignment and ensures balanced distribution across participants.
+Now supports experiment-based task assignments.
 """
 
 import random
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from collections import defaultdict
 import json
 from pathlib import Path
 import logging
 
 from database.models import TaskType
+from database.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +20,12 @@ logger = logging.getLogger(__name__)
 class TaskScheduler:
     """Manages task assignment and scheduling for participants."""
 
-    def __init__(self, assignments_file: str = "data/task_assignments.json"):
+    def __init__(self, assignments_file: str = "data/task_assignments.json", db_manager: DatabaseManager = None):
         self.assignments_file = Path(assignments_file)
         self.assignments = self.load_assignments()
         self.task_distribution = defaultdict(int)
         self._calculate_distribution()
+        self.db_manager = db_manager
 
     def load_assignments(self) -> Dict:
         """Load existing task assignments from file."""
@@ -62,8 +65,19 @@ class TaskScheduler:
                                      tasks_per_session: int = 2) -> List[str]:
         """
         Assign random tasks for a participant's session.
-        Ensures no duplicate tasks across sessions for the same participant.
+        Checks for experiment enrollment first, then falls back to random assignment.
         """
+        # Check if participant is in an experiment
+        if self.db_manager:
+            participant = self.db_manager.get_participant(participant_id=participant_id)
+            if participant and participant.get('experiment_id'):
+                # Get experiment tasks for this session
+                experiment_tasks = self._get_experiment_tasks(participant_id, session_number)
+                if experiment_tasks:
+                    logger.info(f"Using experiment tasks for participant {participant_id}: {experiment_tasks}")
+                    return experiment_tasks
+
+        # Fall back to original random assignment for non-experiment participants
         participant_key = str(participant_id)
 
         # Initialize participant entry if not exists
@@ -100,9 +114,53 @@ class TaskScheduler:
         # Save to file
         self.save_assignments()
 
-        logger.info(f"Assigned tasks {selected_tasks} to participant {participant_id} for session {session_number}")
+        logger.info(f"Assigned random tasks {selected_tasks} to participant {participant_id} for session {session_number}")
 
         return selected_tasks
+
+    def _get_experiment_tasks(self, participant_id: int, session_number: int) -> Optional[List[str]]:
+        """Get tasks for a participant in an experiment."""
+        if not self.db_manager:
+            return None
+
+        try:
+            # Get participant's experiment info
+            participant = self.db_manager.get_participant(participant_id=participant_id)
+            if not participant or not participant.get('experiment_id'):
+                return None
+
+            # Get experiment sessions
+            experiment_sessions = self.db_manager.get_experiment_sessions(participant['experiment_id'])
+
+            # Find the session template for this session number
+            session_template = None
+            for es in experiment_sessions:
+                if es['session_number'] == session_number:
+                    session_template = es
+                    break
+
+            if not session_template:
+                return None
+
+            # Get tasks for this session
+            tasks = []
+            for task in session_template['tasks']:
+                tasks.append(task['task_type'])
+
+            # Check if randomization is enabled
+            experiment = self.db_manager.get_experiment(participant['experiment_id'])
+            if experiment and experiment.get('randomize_order'):
+                # For randomized experiments, we need to maintain consistency
+                # Use participant ID and session number as seed for reproducible randomization
+                random.seed(f"{participant_id}-{session_number}")
+                random.shuffle(tasks)
+                random.seed()  # Reset seed
+
+            return tasks
+
+        except Exception as e:
+            logger.error(f"Error getting experiment tasks: {e}")
+            return None
 
     def _select_balanced_tasks(self, available_tasks: List[str],
                                count: int) -> List[str]:
@@ -134,6 +192,13 @@ class TaskScheduler:
 
     def get_participant_assignments(self, participant_id: int) -> Dict[int, List[str]]:
         """Get all task assignments for a participant."""
+        # Check if participant is in an experiment first
+        if self.db_manager:
+            participant = self.db_manager.get_participant(participant_id=participant_id)
+            if participant and participant.get('experiment_id'):
+                return self._get_experiment_assignments(participant_id)
+
+        # Fall back to file-based assignments
         participant_key = str(participant_id)
 
         if participant_key not in self.assignments:
@@ -144,6 +209,30 @@ class TaskScheduler:
             int(session_num): tasks
             for session_num, tasks in self.assignments[participant_key].items()
         }
+
+    def _get_experiment_assignments(self, participant_id: int) -> Dict[int, List[str]]:
+        """Get all task assignments for an experiment participant."""
+        assignments = {}
+
+        try:
+            participant = self.db_manager.get_participant(participant_id=participant_id)
+            if not participant or not participant.get('experiment_id'):
+                return {}
+
+            # Get all sessions for this participant
+            sessions = self.db_manager.get_participant_sessions(participant_id)
+
+            for session in sessions:
+                session_number = session['session_number']
+                tasks = self._get_experiment_tasks(participant_id, session_number)
+                if tasks:
+                    assignments[session_number] = tasks
+
+            return assignments
+
+        except Exception as e:
+            logger.error(f"Error getting experiment assignments: {e}")
+            return {}
 
     def get_next_session_number(self, participant_id: int) -> int:
         """Get the next session number for a participant."""
@@ -157,6 +246,19 @@ class TaskScheduler:
     def can_schedule_session(self, participant_id: int,
                              max_sessions: int = 2) -> bool:
         """Check if participant can schedule another session."""
+        # Check if participant is in an experiment
+        if self.db_manager:
+            participant = self.db_manager.get_participant(participant_id=participant_id)
+            if participant and participant.get('experiment_id'):
+                # For experiment participants, check experiment progress
+                progress = self.db_manager.get_participant_experiment_progress(
+                    participant_id,
+                    participant['experiment_id']
+                )
+                if progress:
+                    return progress['completed_sessions'] < progress['num_sessions']
+
+        # Fall back to traditional check
         assignments = self.get_participant_assignments(participant_id)
         return len(assignments) < max_sessions
 
@@ -183,6 +285,14 @@ class TaskScheduler:
 
     def reset_participant_assignments(self, participant_id: int):
         """Reset all assignments for a participant (use with caution)."""
+        # Check if participant is in an experiment
+        if self.db_manager:
+            participant = self.db_manager.get_participant(participant_id=participant_id)
+            if participant and participant.get('experiment_id'):
+                logger.warning(f"Cannot reset assignments for experiment participant {participant_id}")
+                return
+
+        # Only reset for non-experiment participants
         participant_key = str(participant_id)
 
         if participant_key in self.assignments:
@@ -233,13 +343,24 @@ class TaskScheduler:
                 len(sessions) for sessions in self.assignments.values()
             ),
             'task_distribution': self.get_task_distribution_stats(),
-            'participants_by_session_count': defaultdict(int)
+            'participants_by_session_count': defaultdict(int),
+            'experiment_participants': 0,
+            'non_experiment_participants': 0
         }
 
         # Count participants by number of sessions
         for sessions in self.assignments.values():
             session_count = len(sessions)
             summary['participants_by_session_count'][session_count] += 1
+
+        # Count experiment vs non-experiment participants if db_manager available
+        if self.db_manager:
+            participants = self.db_manager.get_all_participants()
+            for p in participants:
+                if p.get('experiment_id'):
+                    summary['experiment_participants'] += 1
+                else:
+                    summary['non_experiment_participants'] += 1
 
         return summary
 
@@ -264,3 +385,32 @@ class TaskScheduler:
             json.dump(export_data, f, indent=4)
 
         logger.info(f"Exported assignments to {filepath}")
+
+    def get_experiment_task_configs(self, participant_id: int, session_number: int, task_type: str) -> Optional[Dict]:
+        """Get task configuration for an experiment participant."""
+        if not self.db_manager:
+            return None
+
+        try:
+            participant = self.db_manager.get_participant(participant_id=participant_id)
+            if not participant or not participant.get('experiment_id'):
+                return None
+
+            # Get the session
+            sessions = self.db_manager.get_participant_sessions(participant_id)
+            session = next((s for s in sessions if s['session_number'] == session_number), None)
+
+            if not session or not session.get('experiment_session_id'):
+                return None
+
+            # Get task configs from experiment
+            exp_tasks = self.db_manager.get_experiment_session_tasks(session['experiment_session_id'])
+            for exp_task in exp_tasks:
+                if exp_task['task_type'] == task_type:
+                    return exp_task.get('task_config', {})
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting experiment task configs: {e}")
+            return None

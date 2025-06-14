@@ -48,5 +48,17 @@
             "ice_fishing",
             "spinning_bottle"
         ]
+    },
+    "11": {
+        "1": [
+            "mountain_mining",
+            "spinning_bottle"
+        ]
+    },
+    "12": {
+        "1": [
+            "bart",
+            "ice_fishing"
+        ]
     }
 }

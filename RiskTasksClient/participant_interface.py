@@ -1,6 +1,7 @@
 """
 Participant Interface for Risk Tasks Client
 Simplified interface for participants to start and continue sessions.
+Now supports experiment enrollment via experiment codes.
 """
 
 import tkinter as tk
@@ -16,10 +17,11 @@ import json
 from database.db_manager import DatabaseManager
 from database.models import Participant, Session, TaskType, Gender
 from utils.task_scheduler import TaskScheduler
+from utils.experiment_manager import ExperimentManager
 
 
 class ParticipantInterface(ctk.CTk):
-    """Simplified interface for participants."""
+    """Simplified interface for participants with experiment support."""
 
     def __init__(self, launcher_ref=None):
         super().__init__()
@@ -28,9 +30,11 @@ class ParticipantInterface(ctk.CTk):
         self.db_manager = DatabaseManager()
         self.db_manager.initialize()
         self.task_scheduler = TaskScheduler()
+        self.experiment_manager = ExperimentManager(self.db_manager, self.task_scheduler)
 
         self.current_participant_id = None
         self.current_session_id = None
+        self.current_experiment = None
 
         # Window setup
         self.title("Risk Tasks - Participant")
@@ -121,7 +125,6 @@ class ParticipantInterface(ctk.CTk):
         )
         code_label.pack(pady=(0, 5))
 
-        # FIXED: Store reference to the entry widget directly instead of using StringVar
         self.code_entry = ctk.CTkEntry(
             returning_frame,
             width=200,
@@ -174,13 +177,38 @@ class ParticipantInterface(ctk.CTk):
         form_frame = ctk.CTkFrame(self.main_container)
         form_frame.pack(expand=True)
 
+        # Experiment code input (NEW)
+        exp_code_label = ctk.CTkLabel(
+            form_frame,
+            text="Experiment Code:",
+            font=ctk.CTkFont(size=16)
+        )
+        exp_code_label.grid(row=0, column=0, sticky="e", padx=(20, 10), pady=10)
+
+        self.exp_code_entry = ctk.CTkEntry(
+            form_frame,
+            width=200,
+            font=ctk.CTkFont(size=14),
+            placeholder_text="Optional (e.g., ABC123)"
+        )
+        self.exp_code_entry.grid(row=0, column=1, padx=(0, 20), pady=10)
+
+        # Info label for experiment code
+        exp_info_label = ctk.CTkLabel(
+            form_frame,
+            text="Leave blank for standard protocol",
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
+        )
+        exp_info_label.grid(row=1, column=1, sticky="w", padx=(5, 20), pady=(0, 10))
+
         # Age input
         age_label = ctk.CTkLabel(
             form_frame,
             text="Age:",
             font=ctk.CTkFont(size=16)
         )
-        age_label.grid(row=0, column=0, sticky="e", padx=(20, 10), pady=10)
+        age_label.grid(row=2, column=0, sticky="e", padx=(20, 10), pady=10)
 
         self.age_entry = ctk.CTkEntry(
             form_frame,
@@ -188,7 +216,7 @@ class ParticipantInterface(ctk.CTk):
             font=ctk.CTkFont(size=14),
             placeholder_text="Enter your age"
         )
-        self.age_entry.grid(row=0, column=1, padx=(0, 20), pady=10)
+        self.age_entry.grid(row=2, column=1, padx=(0, 20), pady=10)
 
         # Gender input
         gender_label = ctk.CTkLabel(
@@ -196,7 +224,7 @@ class ParticipantInterface(ctk.CTk):
             text="Gender:",
             font=ctk.CTkFont(size=16)
         )
-        gender_label.grid(row=1, column=0, sticky="e", padx=(20, 10), pady=10)
+        gender_label.grid(row=3, column=0, sticky="e", padx=(20, 10), pady=10)
 
         self.gender_menu = ctk.CTkOptionMenu(
             form_frame,
@@ -204,8 +232,8 @@ class ParticipantInterface(ctk.CTk):
             width=200,
             font=ctk.CTkFont(size=14)
         )
-        self.gender_menu.set("Prefer not to say")  # Set default value
-        self.gender_menu.grid(row=1, column=1, padx=(0, 20), pady=10)
+        self.gender_menu.set("Prefer not to say")
+        self.gender_menu.grid(row=3, column=1, padx=(0, 20), pady=10)
 
         # Buttons
         button_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
@@ -234,10 +262,20 @@ class ParticipantInterface(ctk.CTk):
 
     def register_new_participant(self):
         """Register a new participant and start their first session."""
-        # Debug: Try getting value directly from entry widget
-        print(f"Debug - Age entry value: '{self.age_entry.get()}'")
+        # Get experiment code if provided
+        exp_code = self.exp_code_entry.get().strip() if hasattr(self, 'exp_code_entry') else ""
 
-        # Get value directly from the entry widget
+        # Validate experiment code if provided
+        if exp_code:
+            experiment = self.db_manager.get_experiment_by_code(exp_code)
+            if not experiment:
+                messagebox.showerror("Error", "Invalid experiment code")
+                return
+            if not experiment['active']:
+                messagebox.showerror("Error", "This experiment is not currently active")
+                return
+
+        # Get age value
         age_str = self.age_entry.get().strip()
 
         if not age_str:
@@ -253,9 +291,8 @@ class ParticipantInterface(ctk.CTk):
             messagebox.showerror("Error", "Please enter a valid age")
             return
 
-        # Get gender directly from option menu
+        # Get gender
         gender_selection = self.gender_menu.get()
-        print(f"Debug - Gender selection: '{gender_selection}'")
 
         # Map gender selection to database format
         gender_map = {
@@ -270,24 +307,34 @@ class ParticipantInterface(ctk.CTk):
             # Generate participant code
             participant_code = self.generate_participant_code()
 
-            # Add participant to database
+            # Add participant to database with experiment code
             participant_id = self.db_manager.add_participant(
                 participant_code=participant_code,
                 age=age,
                 gender=gender,
-                notes="Registered via participant interface"
+                notes="Registered via participant interface",
+                experiment_code=exp_code if exp_code else None
             )
 
             self.current_participant_id = participant_id
 
             # Show participant code
-            messagebox.showinfo(
-                "Registration Complete",
-                f"Your participant code is: {participant_code}\n\n"
-                "Please remember this code for future sessions."
-            )
+            if exp_code:
+                experiment = self.db_manager.get_experiment_by_code(exp_code)
+                messagebox.showinfo(
+                    "Registration Complete",
+                    f"Your participant code is: {participant_code}\n\n"
+                    f"You have been enrolled in: {experiment['name']}\n\n"
+                    "Please remember this code for future sessions."
+                )
+            else:
+                messagebox.showinfo(
+                    "Registration Complete",
+                    f"Your participant code is: {participant_code}\n\n"
+                    "Please remember this code for future sessions."
+                )
 
-            # Start first session automatically
+            # Start first session
             self.start_new_session()
 
         except Exception as e:
@@ -311,7 +358,6 @@ class ParticipantInterface(ctk.CTk):
 
     def login_returning_participant(self):
         """Login a returning participant."""
-        # FIXED: Get the value directly from the entry widget instead of StringVar
         code = self.code_entry.get().strip()
         if not code:
             messagebox.showerror("Error", "Please enter your participant code")
@@ -326,8 +372,22 @@ class ParticipantInterface(ctk.CTk):
 
         self.current_participant_id = participant['id']
 
+        # Check if participant is enrolled in an experiment
+        if participant['experiment_id']:
+            self.current_experiment = self.experiment_manager.get_participant_experiment_info(participant['id'])
+
         # Check if they can start a new session
-        if self.task_scheduler.can_schedule_session(participant['id']):
+        can_start_new = False
+
+        if self.current_experiment:
+            # For experiment participants, check experiment progress
+            next_session = self.experiment_manager.get_participant_next_session(participant['id'])
+            can_start_new = next_session is not None
+        else:
+            # For non-experiment participants, use old logic
+            can_start_new = self.task_scheduler.can_schedule_session(participant['id'])
+
+        if can_start_new:
             self.start_new_session()
         else:
             # Check for incomplete sessions
@@ -340,11 +400,18 @@ class ParticipantInterface(ctk.CTk):
                 self.current_session_id = session['id']
                 self.show_session_screen(session['tasks_assigned'])
             else:
-                messagebox.showinfo(
-                    "Study Complete",
-                    "You have completed all sessions in this study.\n"
-                    "Thank you for your participation!"
-                )
+                if self.current_experiment:
+                    messagebox.showinfo(
+                        "Experiment Complete",
+                        f"You have completed all sessions in the '{self.current_experiment['name']}' experiment.\n"
+                        "Thank you for your participation!"
+                    )
+                else:
+                    messagebox.showinfo(
+                        "Study Complete",
+                        "You have completed all sessions in this study.\n"
+                        "Thank you for your participation!"
+                    )
                 self.show_login_screen()
 
     def start_new_session(self):
@@ -353,66 +420,91 @@ class ParticipantInterface(ctk.CTk):
             return
 
         try:
-            # Get next session number
-            session_number = self.task_scheduler.get_next_session_number(self.current_participant_id)
+            # Get participant info
+            participant = self.db_manager.get_participant(participant_id=self.current_participant_id)
 
-            # Check if participant has incomplete sessions
-            sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
-            incomplete_sessions = [s for s in sessions if not s['completed']]
-
-            if incomplete_sessions:
-                result = messagebox.askyesno(
-                    "Incomplete Session",
-                    f"You have an incomplete session (Session {incomplete_sessions[-1]['session_number']}).\n"
-                    "Would you like to continue that session instead?"
+            if participant['experiment_id']:
+                # Participant is in an experiment
+                success, session_id, message = self.experiment_manager.create_participant_next_session(
+                    self.current_participant_id
                 )
 
-                if result:
-                    session = incomplete_sessions[-1]
-                    self.current_session_id = session['id']
-                    self.show_session_screen(session['tasks_assigned'])
-                    return
-
-            # Check session gap requirement
-            if sessions and sessions[-1]['completed']:
-                last_session_date = datetime.fromisoformat(sessions[-1]['session_date'])
-                days_since = (datetime.now() - last_session_date).days
-
-                # Load config for session gap
-                config_path = Path("config/settings.json")
-                if config_path.exists():
-                    with open(config_path, 'r') as f:
-                        config = json.load(f)
-                        required_gap = config.get('experiment', {}).get('session_gap_days', 14)
-                else:
-                    required_gap = 14
-
-                if days_since < required_gap:
-                    messagebox.showinfo(
-                        "Too Soon",
-                        f"Please wait {required_gap - days_since} more days before starting your next session.\n"
-                        f"Your next session will be available on {(last_session_date + timedelta(days=required_gap)).strftime('%Y-%m-%d')}."
-                    )
+                if not success:
+                    messagebox.showinfo("Cannot Start Session", message)
                     self.show_login_screen()
                     return
 
-            # Assign tasks for new session
-            tasks = self.task_scheduler.assign_tasks_for_participant(
-                self.current_participant_id,
-                session_number
-            )
+                self.current_session_id = session_id
 
-            # Create session in database
-            session_id = self.db_manager.create_session(
-                participant_id=self.current_participant_id,
-                session_number=session_number,
-                tasks=tasks
-            )
+                # Get the session details
+                sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
+                current_session = next(s for s in sessions if s['id'] == session_id)
 
-            self.current_session_id = session_id
+                # Show session screen
+                self.show_session_screen(current_session['tasks_assigned'])
 
-            # Show session screen
-            self.show_session_screen(tasks)
+            else:
+                # Non-experiment participant - use old logic
+                # Get next session number
+                session_number = self.task_scheduler.get_next_session_number(self.current_participant_id)
+
+                # Check if participant has incomplete sessions
+                sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
+                incomplete_sessions = [s for s in sessions if not s['completed']]
+
+                if incomplete_sessions:
+                    result = messagebox.askyesno(
+                        "Incomplete Session",
+                        f"You have an incomplete session (Session {incomplete_sessions[-1]['session_number']}).\n"
+                        "Would you like to continue that session instead?"
+                    )
+
+                    if result:
+                        session = incomplete_sessions[-1]
+                        self.current_session_id = session['id']
+                        self.show_session_screen(session['tasks_assigned'])
+                        return
+
+                # Check session gap requirement
+                if sessions and sessions[-1]['completed']:
+                    last_session_date = datetime.fromisoformat(sessions[-1]['session_date'])
+                    days_since = (datetime.now() - last_session_date).days
+
+                    # Load config for session gap
+                    config_path = Path("config/settings.json")
+                    if config_path.exists():
+                        with open(config_path, 'r') as f:
+                            config = json.load(f)
+                            required_gap = config.get('experiment', {}).get('session_gap_days', 14)
+                    else:
+                        required_gap = 14
+
+                    if days_since < required_gap:
+                        messagebox.showinfo(
+                            "Too Soon",
+                            f"Please wait {required_gap - days_since} more days before starting your next session.\n"
+                            f"Your next session will be available on {(last_session_date + timedelta(days=required_gap)).strftime('%Y-%m-%d')}."
+                        )
+                        self.show_login_screen()
+                        return
+
+                # Assign tasks for new session
+                tasks = self.task_scheduler.assign_tasks_for_participant(
+                    self.current_participant_id,
+                    session_number
+                )
+
+                # Create session in database
+                session_id = self.db_manager.create_session(
+                    participant_id=self.current_participant_id,
+                    session_number=session_number,
+                    tasks=tasks
+                )
+
+                self.current_session_id = session_id
+
+                # Show session screen
+                self.show_session_screen(tasks)
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start session: {e}")
@@ -434,6 +526,17 @@ class ParticipantInterface(ctk.CTk):
             font=ctk.CTkFont(size=24, weight="bold")
         )
         title_label.pack(pady=(30, 10))
+
+        # Show experiment info if enrolled
+        if participant['experiment_id']:
+            experiment = self.db_manager.get_experiment(participant['experiment_id'])
+            exp_label = ctk.CTkLabel(
+                self.main_container,
+                text=f"Experiment: {experiment['name']}",
+                font=ctk.CTkFont(size=16),
+                text_color="gray"
+            )
+            exp_label.pack(pady=(0, 10))
 
         # Session info
         sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
@@ -523,6 +626,21 @@ class ParticipantInterface(ctk.CTk):
             )
             complete_label.pack(pady=10)
 
+            # Check if experiment is complete
+            if participant['experiment_id']:
+                progress = self.db_manager.get_participant_experiment_progress(
+                    participant['id'],
+                    participant['experiment_id']
+                )
+                if progress and progress['completed']:
+                    exp_complete_label = ctk.CTkLabel(
+                        self.main_container,
+                        text="You have completed the entire experiment!",
+                        font=ctk.CTkFont(size=16, weight="bold"),
+                        text_color="blue"
+                    )
+                    exp_complete_label.pack(pady=5)
+
             # Add return button
             return_btn = ctk.CTkButton(
                 self.main_container,
@@ -580,6 +698,53 @@ class ParticipantInterface(ctk.CTk):
             )
             return
 
+        # Check if this is an experiment participant and get task config
+        participant = self.db_manager.get_participant(participant_id=self.current_participant_id)
+        task_config = None
+
+        if participant['experiment_id'] and self.current_session_id:
+            # Get experiment task configuration
+            session = None
+            sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
+            for s in sessions:
+                if s['id'] == self.current_session_id:
+                    session = s
+                    break
+
+            if session and session.get('experiment_session_id'):
+                # Get task config from experiment
+                exp_tasks = self.db_manager.get_experiment_session_tasks(session['experiment_session_id'])
+                for exp_task in exp_tasks:
+                    if exp_task['task_type'] == task_name:
+                        task_config = exp_task.get('task_config', {})
+                        break
+
+        # Save task config to temporary file if exists
+        temp_config_path = None
+        if task_config:
+            temp_config_path = Path("config/temp_task_config.json")
+            try:
+                # Load existing settings
+                config_path = Path("config/settings.json")
+                if config_path.exists():
+                    with open(config_path, 'r') as f:
+                        full_config = json.load(f)
+                else:
+                    full_config = {"tasks": {}}
+
+                # Update with experiment-specific config
+                if "tasks" not in full_config:
+                    full_config["tasks"] = {}
+                full_config["tasks"][task_name] = task_config
+
+                # Save to temp file
+                with open(temp_config_path, 'w') as f:
+                    json.dump(full_config, f, indent=4)
+
+            except Exception as e:
+                print(f"Warning: Could not save task config: {e}")
+                temp_config_path = None
+
         # Prepare environment variables
         env = {
             **os.environ,
@@ -587,6 +752,10 @@ class ParticipantInterface(ctk.CTk):
             "PARTICIPANT_ID": str(self.current_participant_id),
             "TASK_NAME": task_name
         }
+
+        # Add custom config path if available
+        if temp_config_path:
+            env["CONFIG_PATH"] = str(temp_config_path.absolute())
 
         # Launch the task
         try:
@@ -609,6 +778,13 @@ class ParticipantInterface(ctk.CTk):
             # Wait for task to complete
             process.wait()
 
+            # Clean up temp config file
+            if temp_config_path and temp_config_path.exists():
+                try:
+                    temp_config_path.unlink()
+                except:
+                    pass
+
             # Show window again and refresh
             self.deiconify()
 
@@ -629,6 +805,7 @@ class ParticipantInterface(ctk.CTk):
         )
         self.current_participant_id = None
         self.current_session_id = None
+        self.current_experiment = None
         self.show_login_screen()
 
     def return_to_launcher(self):

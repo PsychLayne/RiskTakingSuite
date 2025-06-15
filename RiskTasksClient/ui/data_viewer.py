@@ -32,7 +32,9 @@ class DataViewer(ctk.CTkFrame):
         super().__init__(parent)
         self.db_manager = db_manager
         self.current_participant_id = None
+        self.current_experiment_id = None
         self.current_data = None
+        self.view_all_var = tk.BooleanVar(value=False)  # Keep for compatibility
 
         # Setup UI
         self.setup_ui()
@@ -81,12 +83,33 @@ class DataViewer(ctk.CTkFrame):
         )
         filter_label.pack(pady=10)
 
+        # View mode selection
+        view_mode_frame = ctk.CTkFrame(parent)
+        view_mode_frame.pack(fill="x", padx=10, pady=10)
+
+        view_mode_label = ctk.CTkLabel(
+            view_mode_frame,
+            text="View Mode:",
+            anchor="w"
+        )
+        view_mode_label.pack(fill="x", pady=(0, 5))
+
+        self.view_mode_var = tk.StringVar(value="Participant")
+        view_mode_menu = ctk.CTkOptionMenu(
+            view_mode_frame,
+            variable=self.view_mode_var,
+            values=["Participant", "All Participants", "Experiment"],
+            command=self.on_view_mode_changed,
+            width=200
+        )
+        view_mode_menu.pack(fill="x")
+
         # Participant selection
-        participant_frame = ctk.CTkFrame(parent)
-        participant_frame.pack(fill="x", padx=10, pady=10)
+        self.participant_frame = ctk.CTkFrame(parent)
+        self.participant_frame.pack(fill="x", padx=10, pady=10)
 
         participant_label = ctk.CTkLabel(
-            participant_frame,
+            self.participant_frame,
             text="Participant:",
             anchor="w"
         )
@@ -94,22 +117,31 @@ class DataViewer(ctk.CTkFrame):
 
         self.participant_var = tk.StringVar()
         self.participant_menu = ctk.CTkComboBox(
-            participant_frame,
+            self.participant_frame,
             variable=self.participant_var,
             command=self.on_participant_selected,
             width=200
         )
         self.participant_menu.pack(fill="x")
 
-        # View all participants option
-        self.view_all_var = tk.BooleanVar(value=False)
-        view_all_check = ctk.CTkCheckBox(
-            participant_frame,
-            text="View All Participants",
-            variable=self.view_all_var,
-            command=self.on_view_all_toggle
+        # Experiment selection (initially hidden)
+        self.experiment_frame = ctk.CTkFrame(parent)
+
+        experiment_label = ctk.CTkLabel(
+            self.experiment_frame,
+            text="Experiment:",
+            anchor="w"
         )
-        view_all_check.pack(fill="x", pady=(10, 0))
+        experiment_label.pack(fill="x", pady=(0, 5))
+
+        self.experiment_var = tk.StringVar()
+        self.experiment_menu = ctk.CTkComboBox(
+            self.experiment_frame,
+            variable=self.experiment_var,
+            command=self.on_experiment_selected,
+            width=200
+        )
+        self.experiment_menu.pack(fill="x")
 
         # Task filter
         task_frame = ctk.CTkFrame(parent)
@@ -170,6 +202,7 @@ class DataViewer(ctk.CTkFrame):
         self.analysis_var = tk.StringVar(value="Risk Profile")
         analysis_values = [
             "Risk Profile",
+            "Actions/Pumps Over Trials",
             "Points Over Time",
             "Success Rate",
             "Task Comparison",
@@ -308,11 +341,75 @@ class DataViewer(ctk.CTkFrame):
 
     def refresh(self):
         """Refresh all data and update displays."""
-        self.load_participants()
-        if self.current_participant_id or self.view_all_var.get():
+        view_mode = self.view_mode_var.get()
+
+        if view_mode == "Participant":
+            self.load_participants()
+            if self.current_participant_id:
+                self.load_data()
+                self.update_visualization()
+                self.update_statistics()
+        elif view_mode == "All Participants":
             self.load_data()
             self.update_visualization()
             self.update_statistics()
+        elif view_mode == "Experiment":
+            self.load_experiments()
+            if self.current_experiment_id:
+                self.load_data()
+                self.update_visualization()
+                self.update_statistics()
+
+    def on_view_mode_changed(self, choice):
+        """Handle view mode change."""
+        if choice == "Participant":
+            self.participant_frame.pack(fill="x", padx=10, pady=10)
+            self.experiment_frame.pack_forget()
+            self.view_all_var.set(False)
+            self.load_participants()
+            self.current_experiment_id = None
+            if self.current_participant_id:
+                self.load_participant_sessions()
+        elif choice == "All Participants":
+            self.participant_frame.pack_forget()
+            self.experiment_frame.pack_forget()
+            self.view_all_var.set(True)
+            self.current_participant_id = None
+            self.current_experiment_id = None
+            self.session_var.set("All Sessions")
+            self.session_menu.configure(values=["All Sessions"])
+        elif choice == "Experiment":
+            self.participant_frame.pack_forget()
+            self.experiment_frame.pack(fill="x", padx=10, pady=10)
+            self.view_all_var.set(False)
+            self.current_participant_id = None
+            self.load_experiments()
+            self.session_var.set("All Sessions")
+            self.session_menu.configure(values=["All Sessions"])
+
+        self.refresh()
+
+    def load_experiments(self):
+        """Load experiments into the dropdown."""
+        experiments = self.db_manager.get_active_experiments()
+
+        values = ["Select experiment..."]
+        self.experiment_map = {}
+
+        for exp in experiments:
+            display_text = f"{exp['experiment_code']}: {exp['name']} ({exp['enrolled_count']} participants)"
+            values.append(display_text)
+            self.experiment_map[display_text] = exp['id']
+
+        self.experiment_menu.configure(values=values)
+        if not self.current_experiment_id:
+            self.experiment_menu.set("Select experiment...")
+
+    def on_experiment_selected(self, choice):
+        """Handle experiment selection."""
+        if choice in self.experiment_map:
+            self.current_experiment_id = self.experiment_map[choice]
+            self.refresh()
 
     def load_participants(self):
         """Load participants into the dropdown."""
@@ -338,13 +435,6 @@ class DataViewer(ctk.CTkFrame):
             self.load_participant_sessions()
             self.refresh()
 
-    def on_view_all_toggle(self):
-        """Handle view all participants toggle."""
-        if self.view_all_var.get():
-            self.participant_menu.set("All Participants")
-            self.current_participant_id = None
-        self.refresh()
-
     def load_participant_sessions(self):
         """Load sessions for the selected participant."""
         if not self.current_participant_id:
@@ -361,7 +451,7 @@ class DataViewer(ctk.CTkFrame):
 
     def on_filter_changed(self, *args):
         """Handle filter changes."""
-        if self.current_participant_id or self.view_all_var.get():
+        if self.current_participant_id or self.view_all_var.get() or self.current_experiment_id:
             self.load_data()
             self.update_visualization()
             self.update_statistics()
@@ -372,14 +462,96 @@ class DataViewer(ctk.CTkFrame):
 
     def load_data(self):
         """Load data based on current filters."""
-        if self.view_all_var.get():
+        view_mode = self.view_mode_var.get()
+
+        if view_mode == "All Participants":
             # Load data for all participants
             self.current_data = self.load_all_participants_data()
-        elif self.current_participant_id:
+        elif view_mode == "Participant" and self.current_participant_id:
             # Load data for single participant
             self.current_data = self.load_single_participant_data()
+        elif view_mode == "Experiment" and self.current_experiment_id:
+            # Load data for experiment
+            self.current_data = self.load_experiment_data()
         else:
             self.current_data = None
+
+    def load_experiment_data(self):
+        """Load data for all participants in an experiment."""
+        data = []
+
+        # Get experiment details
+        experiment = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
+        if not experiment:
+            return None
+
+        # Get all participants enrolled in this experiment
+        participants = self.db_manager.get_all_participants()
+
+        for participant in participants:
+            # Check if participant is enrolled in this experiment
+            participant_experiment = self.db_manager.get_participant_experiment(participant['id'])
+            if not participant_experiment or participant_experiment['id'] != self.current_experiment_id:
+                continue
+
+            sessions = self.db_manager.get_participant_sessions(participant['id'])
+
+            # Filter sessions that belong to this experiment
+            for session in sessions:
+                # Check if session has experiment_id
+                if session.get('experiment_id') != self.current_experiment_id:
+                    continue
+
+                trials = self.db_manager.get_session_trials(session['id'])
+
+                # Apply task filter
+                task_filter = self.task_var.get()
+                if task_filter != "All Tasks":
+                    for task_type in TaskType:
+                        if TaskType.get_display_name(task_type) == task_filter:
+                            trials = [t for t in trials if t['task_name'] == task_type.value]
+                            break
+
+                for trial in trials:
+                    trial_data = {
+                        'participant_id': participant['id'],
+                        'participant_code': participant['participant_code'],
+                        'experiment_id': self.current_experiment_id,
+                        'experiment_code': experiment['experiment_code'],
+                        'session_id': session['id'],
+                        'session_number': session['session_number'],
+                        'task_name': trial['task_name'],
+                        'trial_number': trial['trial_number'],
+                        'risk_level': trial['risk_level'],
+                        'points_earned': trial['points_earned'],
+                        'outcome': trial['outcome'],
+                        'reaction_time': trial['reaction_time'],
+                        'timestamp': trial['timestamp']
+                    }
+
+                    # Parse additional_data if it exists
+                    if trial.get('additional_data'):
+                        try:
+                            additional = json.loads(trial['additional_data']) if isinstance(trial['additional_data'], str) else trial['additional_data']
+                            trial_data['additional_data'] = additional
+
+                            # Extract action counts based on task type
+                            if trial['task_name'] == 'bart':
+                                trial_data['actions'] = additional.get('pumps', 0)
+                            elif trial['task_name'] == 'ice_fishing':
+                                trial_data['actions'] = additional.get('fish_caught', 0)
+                            elif trial['task_name'] == 'mountain_mining':
+                                trial_data['actions'] = additional.get('ore_collected', 0)
+                            elif trial['task_name'] == 'spinning_bottle':
+                                trial_data['actions'] = additional.get('segments_added', 0)
+                        except:
+                            trial_data['actions'] = None
+                    else:
+                        trial_data['actions'] = None
+
+                    data.append(trial_data)
+
+        return pd.DataFrame(data) if data else None
 
     def load_single_participant_data(self):
         """Load data for a single participant."""
@@ -406,7 +578,7 @@ class DataViewer(ctk.CTkFrame):
                         break
 
             for trial in trials:
-                data.append({
+                trial_data = {
                     'participant_id': self.current_participant_id,
                     'session_id': session['id'],
                     'session_number': session['session_number'],
@@ -417,7 +589,29 @@ class DataViewer(ctk.CTkFrame):
                     'outcome': trial['outcome'],
                     'reaction_time': trial['reaction_time'],
                     'timestamp': trial['timestamp']
-                })
+                }
+
+                # Parse additional_data if it exists
+                if trial.get('additional_data'):
+                    try:
+                        additional = json.loads(trial['additional_data']) if isinstance(trial['additional_data'], str) else trial['additional_data']
+                        trial_data['additional_data'] = additional
+
+                        # Extract action counts based on task type
+                        if trial['task_name'] == 'bart':
+                            trial_data['actions'] = additional.get('pumps', 0)
+                        elif trial['task_name'] == 'ice_fishing':
+                            trial_data['actions'] = additional.get('fish_caught', 0)
+                        elif trial['task_name'] == 'mountain_mining':
+                            trial_data['actions'] = additional.get('ore_collected', 0)
+                        elif trial['task_name'] == 'spinning_bottle':
+                            trial_data['actions'] = additional.get('segments_added', 0)
+                    except:
+                        trial_data['actions'] = None
+                else:
+                    trial_data['actions'] = None
+
+                data.append(trial_data)
 
         return pd.DataFrame(data) if data else None
 
@@ -442,7 +636,7 @@ class DataViewer(ctk.CTkFrame):
                             break
 
                 for trial in trials:
-                    data.append({
+                    trial_data = {
                         'participant_id': participant['id'],
                         'participant_code': participant['participant_code'],
                         'session_id': session['id'],
@@ -454,7 +648,29 @@ class DataViewer(ctk.CTkFrame):
                         'outcome': trial['outcome'],
                         'reaction_time': trial['reaction_time'],
                         'timestamp': trial['timestamp']
-                    })
+                    }
+
+                    # Parse additional_data if it exists
+                    if trial.get('additional_data'):
+                        try:
+                            additional = json.loads(trial['additional_data']) if isinstance(trial['additional_data'], str) else trial['additional_data']
+                            trial_data['additional_data'] = additional
+
+                            # Extract action counts based on task type
+                            if trial['task_name'] == 'bart':
+                                trial_data['actions'] = additional.get('pumps', 0)
+                            elif trial['task_name'] == 'ice_fishing':
+                                trial_data['actions'] = additional.get('fish_caught', 0)
+                            elif trial['task_name'] == 'mountain_mining':
+                                trial_data['actions'] = additional.get('ore_collected', 0)
+                            elif trial['task_name'] == 'spinning_bottle':
+                                trial_data['actions'] = additional.get('segments_added', 0)
+                        except:
+                            trial_data['actions'] = None
+                    else:
+                        trial_data['actions'] = None
+
+                    data.append(trial_data)
 
         return pd.DataFrame(data) if data else None
 
@@ -474,6 +690,8 @@ class DataViewer(ctk.CTkFrame):
 
         if analysis_type == "Risk Profile":
             self.plot_risk_profile()
+        elif analysis_type == "Actions/Pumps Over Trials":
+            self.plot_actions_over_trials()
         elif analysis_type == "Points Over Time":
             self.plot_points_over_time()
         elif analysis_type == "Success Rate":
@@ -490,8 +708,10 @@ class DataViewer(ctk.CTkFrame):
         ax = self.figure.add_subplot(111)
         ax.set_facecolor('#3b3b3b')
 
-        if self.view_all_var.get():
-            # Plot average risk profile for all participants
+        view_mode = self.view_mode_var.get()
+
+        if view_mode in ["All Participants", "Experiment"]:
+            # Plot average risk profile for multiple participants
             avg_risk = self.current_data.groupby('trial_number')['risk_level'].mean()
             std_risk = self.current_data.groupby('trial_number')['risk_level'].std()
 
@@ -500,8 +720,13 @@ class DataViewer(ctk.CTkFrame):
                             avg_risk.values - std_risk.values,
                             avg_risk.values + std_risk.values,
                             alpha=0.3, color='blue', label='±1 SD')
+
+            # Add participant count to title
+            n_participants = self.current_data['participant_id'].nunique()
+            title_suffix = f" (n={n_participants})"
         else:
             # Plot risk profile for single participant
+            title_suffix = ""
             for task in self.current_data['task_name'].unique():
                 task_data = self.current_data[self.current_data['task_name'] == task]
                 display_name = TaskType.get_display_name(TaskType(task))
@@ -510,7 +735,13 @@ class DataViewer(ctk.CTkFrame):
 
         ax.set_xlabel('Trial Number', fontsize=12, color='white')
         ax.set_ylabel('Risk Level', fontsize=12, color='white')
-        ax.set_title('Risk-Taking Profile', fontsize=14, color='white', pad=20)
+
+        if view_mode == "Experiment" and self.current_experiment_id:
+            exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
+            ax.set_title(f'Risk Profile - {exp["name"]}{title_suffix}', fontsize=14, color='white', pad=20)
+        else:
+            ax.set_title(f'Risk-Taking Profile{title_suffix}', fontsize=14, color='white', pad=20)
+
         ax.legend()
         ax.grid(True, alpha=0.3)
         ax.tick_params(colors='white')
@@ -518,12 +749,85 @@ class DataViewer(ctk.CTkFrame):
         # Set y-axis limits
         ax.set_ylim(0, 1.1)
 
+    def plot_actions_over_trials(self):
+        """Plot number of actions/pumps over trials."""
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor('#3b3b3b')
+
+        view_mode = self.view_mode_var.get()
+
+        if view_mode in ["All Participants", "Experiment"]:
+            # Plot average actions for multiple participants
+            # Filter out rows where actions is None
+            valid_data = self.current_data[self.current_data['actions'].notna()]
+
+            if valid_data.empty:
+                ax.text(0.5, 0.5, 'No action data available\n(This requires trials with additional_data)',
+                        ha='center', va='center', fontsize=14, color='white')
+                return
+
+            avg_actions = valid_data.groupby('trial_number')['actions'].mean()
+            std_actions = valid_data.groupby('trial_number')['actions'].std()
+
+            ax.plot(avg_actions.index, avg_actions.values, 'b-', linewidth=2, label='Average')
+            ax.fill_between(avg_actions.index,
+                            avg_actions.values - std_actions.values,
+                            avg_actions.values + std_actions.values,
+                            alpha=0.3, color='blue', label='±1 SD')
+
+            # Add participant count to title
+            n_participants = valid_data['participant_id'].nunique()
+            title_suffix = f" (n={n_participants})"
+        else:
+            # Plot actions for single participant by task
+            title_suffix = ""
+            valid_data = self.current_data[self.current_data['actions'].notna()]
+
+            if valid_data.empty:
+                ax.text(0.5, 0.5, 'No action data available\n(This requires trials with additional_data)',
+                        ha='center', va='center', fontsize=14, color='white')
+                return
+
+            for task in valid_data['task_name'].unique():
+                task_data = valid_data[valid_data['task_name'] == task]
+                display_name = TaskType.get_display_name(TaskType(task))
+
+                ax.plot(task_data['trial_number'], task_data['actions'],
+                        marker='o', label=display_name, linewidth=2, markersize=6)
+
+        ax.set_xlabel('Trial Number', fontsize=12, color='white')
+
+        # Set y-label based on task filter
+        task_filter = self.task_var.get()
+        if task_filter == "Balloon Task (BART)":
+            ax.set_ylabel('Number of Pumps', fontsize=12, color='white')
+        elif task_filter == "Ice Fishing":
+            ax.set_ylabel('Fish Caught', fontsize=12, color='white')
+        elif task_filter == "Mountain Mining":
+            ax.set_ylabel('Ore Collected', fontsize=12, color='white')
+        elif task_filter == "Spinning Bottle":
+            ax.set_ylabel('Segments Added', fontsize=12, color='white')
+        else:
+            ax.set_ylabel('Number of Actions', fontsize=12, color='white')
+
+        if view_mode == "Experiment" and self.current_experiment_id:
+            exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
+            ax.set_title(f'Actions Over Trials - {exp["name"]}{title_suffix}', fontsize=14, color='white', pad=20)
+        else:
+            ax.set_title(f'Actions Over Trials{title_suffix}', fontsize=14, color='white', pad=20)
+
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(colors='white')
+
     def plot_points_over_time(self):
         """Plot cumulative points over time."""
         ax = self.figure.add_subplot(111)
         ax.set_facecolor('#3b3b3b')
 
-        if self.view_all_var.get():
+        view_mode = self.view_mode_var.get()
+
+        if view_mode in ["All Participants", "Experiment"]:
             # Plot for each participant
             for participant_id in self.current_data['participant_id'].unique():
                 p_data = self.current_data[self.current_data['participant_id'] == participant_id]
@@ -546,7 +850,13 @@ class DataViewer(ctk.CTkFrame):
 
         ax.set_xlabel('Trial Number', fontsize=12, color='white')
         ax.set_ylabel('Cumulative Points', fontsize=12, color='white')
-        ax.set_title('Points Accumulation Over Time', fontsize=14, color='white', pad=20)
+
+        if view_mode == "Experiment" and self.current_experiment_id:
+            exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
+            ax.set_title(f'Points Accumulation - {exp["name"]}', fontsize=14, color='white', pad=20)
+        else:
+            ax.set_title('Points Accumulation Over Time', fontsize=14, color='white', pad=20)
+
         ax.legend()
         ax.grid(True, alpha=0.3)
         ax.tick_params(colors='white')
@@ -629,10 +939,16 @@ class DataViewer(ctk.CTkFrame):
         """Plot correlation matrix of risk metrics."""
         ax = self.figure.add_subplot(111)
 
+        view_mode = self.view_mode_var.get()
+
         # Prepare data for correlation
+        if view_mode in ["All Participants", "Experiment"]:
+            index_cols = ['participant_id', 'session_number']
+        else:
+            index_cols = ['session_number', 'trial_number']
+
         corr_data = self.current_data.pivot_table(
-            index=['participant_id', 'session_number'] if self.view_all_var.get() else ['session_number',
-                                                                                        'trial_number'],
+            index=index_cols,
             columns='task_name',
             values='risk_level',
             aggfunc='mean'
@@ -670,7 +986,11 @@ class DataViewer(ctk.CTkFrame):
                                ha="center", va="center",
                                color="black" if abs(correlation.iloc[i, j]) < 0.5 else "white")
 
-        ax.set_title('Task Correlation Matrix', fontsize=14, color='white', pad=20)
+        if view_mode == "Experiment" and self.current_experiment_id:
+            exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
+            ax.set_title(f'Task Correlation Matrix - {exp["name"]}', fontsize=14, color='white', pad=20)
+        else:
+            ax.set_title('Task Correlation Matrix', fontsize=14, color='white', pad=20)
 
     def update_statistics(self):
         """Update statistics display."""
@@ -681,9 +1001,22 @@ class DataViewer(ctk.CTkFrame):
             return
 
         stats_lines = []
+        view_mode = self.view_mode_var.get()
+
+        # Add view mode specific header
+        if view_mode == "Experiment" and self.current_experiment_id:
+            exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
+            stats_lines.append(f"=== Experiment: {exp['name']} ===")
+            stats_lines.append(f"Code: {exp['experiment_code']}")
+            stats_lines.append(f"Participants: {self.current_data['participant_id'].nunique()}")
+            stats_lines.append(f"Sessions: {self.current_data['session_id'].nunique()}\n")
+        elif view_mode == "All Participants":
+            stats_lines.append("=== All Participants ===")
+            stats_lines.append(f"Total Participants: {self.current_data['participant_id'].nunique()}")
+            stats_lines.append(f"Total Sessions: {self.current_data['session_id'].nunique()}\n")
 
         # Overall statistics
-        stats_lines.append("=== Overall Statistics ===\n")
+        stats_lines.append("=== Overall Statistics ===")
         stats_lines.append(f"Total Trials: {len(self.current_data)}")
         stats_lines.append(f"Total Points: {self.current_data['points_earned'].sum()}")
         stats_lines.append(f"Average Risk Level: {self.current_data['risk_level'].mean():.3f}")
@@ -703,6 +1036,10 @@ class DataViewer(ctk.CTkFrame):
             stats_lines.append(f"  Points: {task_data['points_earned'].sum()}")
             stats_lines.append(f"  Avg Risk: {task_data['risk_level'].mean():.3f}")
             stats_lines.append(f"  Success Rate: {(task_data['outcome'] == 'success').mean():.1%}")
+
+            # Add average actions if available
+            if 'actions' in task_data and task_data['actions'].notna().any():
+                stats_lines.append(f"  Avg Actions: {task_data['actions'].mean():.1f}")
 
         # Risk profile categorization
         avg_risk = self.current_data['risk_level'].mean()
@@ -807,8 +1144,16 @@ class DataViewer(ctk.CTkFrame):
 
     def generate_participant_report(self):
         """Generate detailed participant report."""
-        if not self.current_participant_id:
+        view_mode = self.view_mode_var.get()
+
+        if view_mode == "Participant" and not self.current_participant_id:
             messagebox.showwarning("No Selection", "Please select a participant first")
+            return
+        elif view_mode == "Experiment" and not self.current_experiment_id:
+            messagebox.showwarning("No Selection", "Please select an experiment first")
+            return
+        elif view_mode == "All Participants":
+            messagebox.showinfo("Info", "Use 'Summary Report' for all participants view")
             return
 
         filename = filedialog.asksaveasfilename(
@@ -818,30 +1163,62 @@ class DataViewer(ctk.CTkFrame):
 
         if filename:
             try:
-                participant_data = self.db_manager.export_participant_data(self.current_participant_id)
+                if view_mode == "Participant":
+                    participant_data = self.db_manager.export_participant_data(self.current_participant_id)
 
-                with open(filename, 'w') as f:
-                    f.write("PARTICIPANT REPORT\n")
-                    f.write("=" * 50 + "\n\n")
+                    with open(filename, 'w') as f:
+                        f.write("PARTICIPANT REPORT\n")
+                        f.write("=" * 50 + "\n\n")
 
-                    # Participant info
-                    p_info = participant_data['participant']
-                    f.write(f"Participant Code: {p_info['participant_code']}\n")
-                    f.write(f"Age: {p_info['age'] or 'Not specified'}\n")
-                    f.write(f"Gender: {p_info['gender'] or 'Not specified'}\n")
-                    f.write(f"Created: {p_info['created_date']}\n")
-                    f.write(f"Notes: {p_info['notes'] or 'None'}\n\n")
+                        # Participant info
+                        p_info = participant_data['participant']
+                        f.write(f"Participant Code: {p_info['participant_code']}\n")
+                        f.write(f"Age: {p_info['age'] or 'Not specified'}\n")
+                        f.write(f"Gender: {p_info['gender'] or 'Not specified'}\n")
+                        f.write(f"Created: {p_info['created_date']}\n")
+                        f.write(f"Notes: {p_info['notes'] or 'None'}\n\n")
 
-                    # Session details
-                    f.write("SESSIONS\n")
-                    f.write("-" * 30 + "\n")
+                        # Session details
+                        f.write("SESSIONS\n")
+                        f.write("-" * 30 + "\n")
 
-                    for session in participant_data['sessions']:
-                        f.write(f"\nSession {session['session_number']}:\n")
-                        f.write(f"  Date: {session['session_date']}\n")
-                        f.write(f"  Status: {'Completed' if session['completed'] else 'Incomplete'}\n")
-                        f.write(f"  Tasks: {', '.join(session['tasks_assigned'])}\n")
-                        f.write(f"  Trials: {len(session['trials'])}\n")
+                        for session in participant_data['sessions']:
+                            f.write(f"\nSession {session['session_number']}:\n")
+                            f.write(f"  Date: {session['session_date']}\n")
+                            f.write(f"  Status: {'Completed' if session['completed'] else 'Incomplete'}\n")
+                            f.write(f"  Tasks: {', '.join(session['tasks_assigned'])}\n")
+                            f.write(f"  Trials: {len(session['trials'])}\n")
+
+                elif view_mode == "Experiment":
+                    # Generate experiment report
+                    exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
+                    stats = self.db_manager.get_experiment_statistics(self.current_experiment_id)
+
+                    with open(filename, 'w') as f:
+                        f.write("EXPERIMENT REPORT\n")
+                        f.write("=" * 50 + "\n\n")
+
+                        f.write(f"Experiment: {exp['name']}\n")
+                        f.write(f"Code: {exp['experiment_code']}\n")
+                        f.write(f"Status: {'Active' if exp['is_active'] else 'Inactive'}\n")
+                        f.write(f"Created: {exp['created_date']}\n\n")
+
+                        f.write("ENROLLMENT STATISTICS\n")
+                        f.write("-" * 30 + "\n")
+                        f.write(f"Total Participants: {stats['participant_count']}\n")
+                        f.write(f"Total Sessions: {stats['session_count']}\n")
+                        f.write(f"Completed Sessions: {stats['completed_sessions']}\n\n")
+
+                        f.write("TASK STATISTICS\n")
+                        f.write("-" * 30 + "\n")
+
+                        for task_name, task_stats in stats['task_statistics'].items():
+                            display_name = TaskType.get_display_name(TaskType(task_name))
+                            f.write(f"\n{display_name}:\n")
+                            f.write(f"  Trials: {task_stats['trial_count']}\n")
+                            f.write(f"  Avg Risk: {task_stats['avg_risk']:.3f}\n")
+                            f.write(f"  Avg Points: {task_stats['avg_points']:.1f}\n")
+                            f.write(f"  Success Rate: {task_stats['success_rate'] * 100:.1f}%\n")
 
                 messagebox.showinfo("Success", f"Report saved to {filename}")
             except Exception as e:

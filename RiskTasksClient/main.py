@@ -22,7 +22,7 @@ ctk.set_default_color_theme("blue")
 from database.db_manager import DatabaseManager
 from database.models import Participant, Session, TrialData
 from ui.participant_manager import ParticipantManager
-from ui.session_manager import SessionManager
+from ui.session_manager import SessionMonitor
 from ui.settings_panel import SettingsPanel
 from ui.data_viewer import DataViewer
 from ui.experiment_builder import ExperimentBuilder
@@ -197,10 +197,9 @@ class RiskTasksClient(ctk.CTk):
         )
 
         # Sessions page
-        self.pages["sessions"] = SessionManager(
+        self.pages["sessions"] = SessionMonitor(
             self.content_frame,
-            self.db_manager,
-            self.task_scheduler
+            self.db_manager
         )
 
         # Data analysis page

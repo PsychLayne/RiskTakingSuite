@@ -1,6 +1,7 @@
 """
 Participant Interface for Risk Tasks Client - FIXED VERSION
 Handles 0 session gap for immediate sessions and proper experiment task mapping.
+Fixed duplicate task assignment issue.
 """
 
 import tkinter as tk
@@ -484,6 +485,9 @@ class ParticipantInterface(ctk.CTk):
         assignments_file = Path("data/session_task_instances.json")
 
         try:
+            # Ensure directory exists
+            assignments_file.parent.mkdir(exist_ok=True, parents=True)
+
             if assignments_file.exists():
                 with open(assignments_file, 'r') as f:
                     assignments = json.load(f)
@@ -492,12 +496,15 @@ class ParticipantInterface(ctk.CTk):
 
             assignments[str(session_id)] = instance_ids
 
-            assignments_file.parent.mkdir(exist_ok=True)
             with open(assignments_file, 'w') as f:
                 json.dump(assignments, f, indent=2)
 
+            print(f"Stored task instances for session {session_id}: {instance_ids}")
+
         except Exception as e:
             print(f"Error storing task instance assignments: {e}")
+            # This is critical - raise the error so session creation fails
+            raise
 
     def get_task_instance_assignment(self, session_id: int) -> list:
         """Get task instances assigned to a session."""
@@ -546,13 +553,19 @@ class ParticipantInterface(ctk.CTk):
         sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
         used_instances = set()
 
+        # IMPORTANT: Don't exclude current session - get ALL previous sessions
         for session in sessions:
-            if session['id'] != self.current_session_id:
+            # Only get assignments from completed sessions or sessions with lower numbers
+            if session['session_number'] < session_number:
                 session_instances = self.get_task_instance_assignment(session['id'])
                 used_instances.update(session_instances)
 
+        print(f"Session {session_number}: Previously used instances: {used_instances}")
+
         # Get available instances
         available_instances = [inst for inst in enabled_instances if inst not in used_instances]
+
+        print(f"Session {session_number}: Available instances: {available_instances}")
 
         # Select instances
         if len(available_instances) >= tasks_per_session:
@@ -572,6 +585,9 @@ class ParticipantInterface(ctk.CTk):
             task_type = task_instances[instance_id].get('task_type')
             if task_type:
                 tasks.append(task_type)
+
+        print(f"Session {session_number}: Selected instances: {selected_instances}")
+        print(f"Session {session_number}: Selected tasks: {tasks}")
 
         return tasks, selected_instances
 
@@ -644,9 +660,12 @@ class ParticipantInterface(ctk.CTk):
 
             self.current_session_id = session_id
 
-            # Store instance assignments if we have them
+            # IMPORTANT: Store instance assignments IMMEDIATELY after creating session
             if instance_ids:
                 self.store_task_instance_assignment(session_id, instance_ids)
+                # Verify it was stored
+                stored = self.get_task_instance_assignment(session_id)
+                print(f"Verified stored instances for session {session_id}: {stored}")
 
             # Show session screen
             self.show_session_screen(tasks)

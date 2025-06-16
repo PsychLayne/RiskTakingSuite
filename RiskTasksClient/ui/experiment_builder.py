@@ -836,7 +836,31 @@ class ExperimentBuilder(ctk.CTkFrame):
                 widgets['balloon_color'].set(config['balloon_color'])
             if 'random_colors' in config:
                 widgets['random_colors'].set(config['random_colors'])
-        # Similar for other task types...
+
+        elif task_type == 'ice_fishing':
+            if 'max_fish' in config:
+                widgets['max_fish'].set(str(config['max_fish']))
+            if 'points_per_fish' in config:
+                widgets['points_per_fish'].set(str(config['points_per_fish']))
+
+        elif task_type == 'mountain_mining':
+            if 'max_ore' in config:
+                widgets['max_ore'].set(str(config['max_ore']))
+            if 'points_per_ore' in config:
+                widgets['points_per_ore'].set(str(config['points_per_ore']))
+
+        elif task_type == 'spinning_bottle':
+            if 'segments' in config:
+                widgets['segments'].set(str(config['segments']))
+            if 'points_per_add' in config:
+                widgets['points_per_add'].set(str(config['points_per_add']))
+            if 'spin_speed_range' in config:
+                widgets['speed_min'].set(str(config['spin_speed_range'][0]))
+                widgets['speed_max'].set(str(config['spin_speed_range'][1]))
+            if 'win_color' in config:
+                widgets['win_color'].set(config['win_color'])
+            if 'loss_color' in config:
+                widgets['loss_color'].set(config['loss_color'])
 
     def save_instance_config(self, dialog, instance_id, widgets):
         """Save configuration for a task instance."""
@@ -880,6 +904,7 @@ class ExperimentBuilder(ctk.CTkFrame):
             config['random_colors'] = widgets['random_colors'].get()
 
         elif task_type == 'ice_fishing':
+            # Process Ice Fishing config
             if widgets['max_fish'].get().strip():
                 try:
                     config['max_fish'] = int(widgets['max_fish'].get())
@@ -894,7 +919,56 @@ class ExperimentBuilder(ctk.CTkFrame):
                     messagebox.showerror("Invalid Value", "Points per fish must be a number")
                     return
 
-        # Similar for other task types...
+        elif task_type == 'mountain_mining':
+            # Process Mountain Mining config
+            if widgets['max_ore'].get().strip():
+                try:
+                    config['max_ore'] = int(widgets['max_ore'].get())
+                except ValueError:
+                    messagebox.showerror("Invalid Value", "Max ore must be a number")
+                    return
+
+            if widgets['points_per_ore'].get().strip():
+                try:
+                    config['points_per_ore'] = int(widgets['points_per_ore'].get())
+                except ValueError:
+                    messagebox.showerror("Invalid Value", "Points per ore must be a number")
+                    return
+
+        elif task_type == 'spinning_bottle':
+            # Process Spinning Bottle config
+            if widgets['segments'].get():
+                try:
+                    config['segments'] = int(widgets['segments'].get())
+                except ValueError:
+                    messagebox.showerror("Invalid Value", "Segments must be a number")
+                    return
+
+            if widgets['points_per_add'].get().strip():
+                try:
+                    config['points_per_add'] = int(widgets['points_per_add'].get())
+                except ValueError:
+                    messagebox.showerror("Invalid Value", "Points per add must be a number")
+                    return
+
+            # Spin speed range
+            if widgets['speed_min'].get().strip() and widgets['speed_max'].get().strip():
+                try:
+                    min_speed = float(widgets['speed_min'].get())
+                    max_speed = float(widgets['speed_max'].get())
+                    if min_speed >= max_speed:
+                        messagebox.showerror("Invalid Value", "Min speed must be less than max speed")
+                        return
+                    config['spin_speed_range'] = [min_speed, max_speed]
+                except ValueError:
+                    messagebox.showerror("Invalid Value", "Speed range must be numbers")
+                    return
+
+            # Colors
+            if widgets['win_color'].get():
+                config['win_color'] = widgets['win_color'].get()
+            if widgets['loss_color'].get():
+                config['loss_color'] = widgets['loss_color'].get()
 
         # Save config to instance
         instance['config'] = config

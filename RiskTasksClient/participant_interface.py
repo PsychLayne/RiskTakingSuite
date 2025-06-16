@@ -12,6 +12,7 @@ import sys
 import os
 from pathlib import Path
 import json
+from typing import Tuple, List
 
 from database.db_manager import DatabaseManager
 from database.models import Participant, Session, TaskType, Gender
@@ -477,9 +478,50 @@ class ParticipantInterface(ctk.CTk):
 
         return True
 
-    def get_actual_task_types_from_experiment(self, experiment: dict, session_number: int) -> list:
-        """Extract actual task types from experiment configuration."""
+    def store_task_instance_assignment(self, session_id: int, instance_ids: list):
+        """Store which task instances were assigned to a session."""
+        # Store in a file
+        assignments_file = Path("data/session_task_instances.json")
+
+        try:
+            if assignments_file.exists():
+                with open(assignments_file, 'r') as f:
+                    assignments = json.load(f)
+            else:
+                assignments = {}
+
+            assignments[str(session_id)] = instance_ids
+
+            assignments_file.parent.mkdir(exist_ok=True)
+            with open(assignments_file, 'w') as f:
+                json.dump(assignments, f, indent=2)
+
+        except Exception as e:
+            print(f"Error storing task instance assignments: {e}")
+
+    def get_task_instance_assignment(self, session_id: int) -> list:
+        """Get task instances assigned to a session."""
+        assignments_file = Path("data/session_task_instances.json")
+
+        try:
+            if assignments_file.exists():
+                with open(assignments_file, 'r') as f:
+                    assignments = json.load(f)
+                    return assignments.get(str(session_id), [])
+        except Exception as e:
+            print(f"Error loading task instance assignments: {e}")
+
+        return []
+
+    def get_tasks_and_instances_for_session(self, experiment: dict, session_number: int) -> Tuple[List[str], List[str]]:
+        """Get both task types and instance IDs for a session."""
         exp_config = experiment['config'].get('experiment', {})
+        task_instances = experiment['config'].get('task_instances', {})
+
+        if not task_instances:
+            # Fallback for old format
+            tasks = self.get_actual_task_types_from_experiment(experiment, session_number)
+            return tasks, []
 
         # Check for fixed sequence first
         task_sequence = exp_config.get('task_sequence', {})
@@ -488,75 +530,84 @@ class ParticipantInterface(ctk.CTk):
             session_key = str(session_number)
             if session_key in sequences:
                 instance_ids = sequences[session_key]
-                # Map instance IDs to actual task types
-                task_instances = experiment['config'].get('task_instances', {})
                 tasks = []
                 for instance_id in instance_ids:
                     if instance_id in task_instances:
                         task_type = task_instances[instance_id].get('task_type')
                         if task_type:
                             tasks.append(task_type)
-                return tasks
+                return tasks, instance_ids
 
-        # For random assignment, we need to ensure proper distribution
-        task_instances = experiment['config'].get('task_instances', {})
-        if task_instances:
-            # Build a list of all available task types (not instances)
-            available_task_types = set()
-            instance_to_type_map = {}
+        # Random assignment
+        enabled_instances = exp_config.get('enabled_task_instances', list(task_instances.keys()))
+        tasks_per_session = exp_config.get('tasks_per_session', 2)
 
-            for instance_id, instance in task_instances.items():
-                task_type = instance.get('task_type')
-                if task_type:
-                    available_task_types.add(task_type)
-                    instance_to_type_map[instance_id] = task_type
+        # Get all previous instance assignments for this participant
+        sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
+        used_instances = set()
 
-            # Convert to list for ordering
-            all_task_types = list(available_task_types)
+        for session in sessions:
+            if session['id'] != self.current_session_id:
+                session_instances = self.get_task_instance_assignment(session['id'])
+                used_instances.update(session_instances)
 
-            # Get tasks per session
+        # Get available instances
+        available_instances = [inst for inst in enabled_instances if inst not in used_instances]
+
+        # Select instances
+        if len(available_instances) >= tasks_per_session:
+            import random
+            selected_instances = random.sample(available_instances, tasks_per_session)
+        else:
+            # This shouldn't happen with proper validation
+            raise ValueError(
+                f"Not enough unused task instances. Need {tasks_per_session} but only "
+                f"{len(available_instances)} available. Total instances: {len(enabled_instances)}, "
+                f"Used: {len(used_instances)}"
+            )
+
+        # Convert to task types
+        tasks = []
+        for instance_id in selected_instances:
+            task_type = task_instances[instance_id].get('task_type')
+            if task_type:
+                tasks.append(task_type)
+
+        return tasks, selected_instances
+
+    def get_actual_task_types_from_experiment(self, experiment: dict, session_number: int) -> list:
+        """Extract actual task types from experiment configuration - backward compatibility."""
+        exp_config = experiment['config'].get('experiment', {})
+
+        # For backward compatibility with experiments that don't use instances
+        enabled_tasks = exp_config.get('enabled_tasks', [])
+        if enabled_tasks:
             tasks_per_session = exp_config.get('tasks_per_session', 2)
 
-            # Check if we have enough unique task types
-            if len(all_task_types) < tasks_per_session:
-                raise ValueError(
-                    f"Not enough unique task types. Have {len(all_task_types)} unique tasks "
-                    f"but need {tasks_per_session} per session."
-                )
-
-            # Get previously assigned tasks for this participant
+            # Get previously assigned tasks
             sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
             assigned_tasks = set()
             for session in sessions:
-                if session['id'] != self.current_session_id:  # Don't include current session
+                if session['id'] != self.current_session_id:
                     assigned_tasks.update(session['tasks_assigned'])
 
-            # Determine which tasks to assign for this session
-            if session_number == 1:
-                # First session: randomly select from all available task types
+            # Get available tasks
+            available_tasks = [t for t in enabled_tasks if t not in assigned_tasks]
+
+            if len(available_tasks) >= tasks_per_session:
                 import random
-                selected_tasks = random.sample(all_task_types, tasks_per_session)
+                return random.sample(available_tasks, tasks_per_session)
             else:
-                # Second session: assign the remaining tasks
-                remaining_tasks = [t for t in all_task_types if t not in assigned_tasks]
+                # Use all available and fill from assigned if needed
+                import random
+                selected = available_tasks.copy()
+                if len(selected) < tasks_per_session:
+                    already_assigned = list(assigned_tasks)
+                    random.shuffle(already_assigned)
+                    needed = tasks_per_session - len(selected)
+                    selected.extend(already_assigned[:needed])
+                return selected
 
-                if len(remaining_tasks) >= tasks_per_session:
-                    import random
-                    selected_tasks = random.sample(remaining_tasks, tasks_per_session)
-                else:
-                    # If not enough remaining tasks, something went wrong
-                    # Fall back to random selection from all tasks
-                    import random
-                    selected_tasks = random.sample(all_task_types, tasks_per_session)
-
-            return selected_tasks
-
-        # Fallback to old format if task_instances not found
-        enabled_tasks = exp_config.get('enabled_tasks', [])
-        if enabled_tasks:
-            return enabled_tasks[:exp_config.get('tasks_per_session', 2)]
-
-        # If all else fails, return empty list
         return []
 
     def start_new_session(self):
@@ -569,8 +620,8 @@ class ParticipantInterface(ctk.CTk):
             sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
             session_number = len(sessions) + 1
 
-            # Get tasks based on experiment configuration
-            tasks = self.get_actual_task_types_from_experiment(self.current_experiment, session_number)
+            # Get tasks and instance IDs based on experiment configuration
+            tasks, instance_ids = self.get_tasks_and_instances_for_session(self.current_experiment, session_number)
 
             if not tasks:
                 messagebox.showerror(
@@ -581,6 +632,7 @@ class ParticipantInterface(ctk.CTk):
 
             # Debug print to verify task assignment
             print(f"Session {session_number} tasks: {tasks}")
+            print(f"Session {session_number} instances: {instance_ids}")
 
             # Create session in database with experiment ID
             session_id = self.db_manager.create_session_for_experiment(
@@ -591,6 +643,10 @@ class ParticipantInterface(ctk.CTk):
             )
 
             self.current_session_id = session_id
+
+            # Store instance assignments if we have them
+            if instance_ids:
+                self.store_task_instance_assignment(session_id, instance_ids)
 
             # Show session screen
             self.show_session_screen(tasks)
@@ -663,10 +719,21 @@ class ParticipantInterface(ctk.CTk):
             if len(task_trials) >= required_trials:
                 completed_tasks.add(task)
 
+        # Get task instance assignments for this session
+        instance_ids = self.get_task_instance_assignment(self.current_session_id)
+
         # Create task buttons
         self.task_buttons = {}
         for i, task in enumerate(tasks):
             display_name = TaskType.get_display_name(TaskType(task))
+
+            # If we have instance assignments, get the specific instance for this task
+            if instance_ids and i < len(instance_ids):
+                instance_id = instance_ids[i]
+                task_instances = self.current_experiment['config'].get('task_instances', {})
+                if instance_id in task_instances:
+                    instance_display = task_instances[instance_id].get('display_name', display_name)
+                    display_name = instance_display
 
             if task in completed_tasks:
                 button_text = f"✓ {display_name}"
@@ -680,7 +747,7 @@ class ParticipantInterface(ctk.CTk):
             btn = ctk.CTkButton(
                 tasks_frame,
                 text=button_text,
-                command=lambda t=task: self.launch_task(t),
+                command=lambda t=task, idx=i: self.launch_task_with_instance(t, idx),
                 state=button_state,
                 fg_color=button_color,
                 width=250,
@@ -762,7 +829,18 @@ class ParticipantInterface(ctk.CTk):
             )
             logout_btn.pack(pady=(0, 20))
 
-    def launch_task(self, task_name):
+    def launch_task_with_instance(self, task_name: str, task_index: int):
+        """Launch task with specific instance configuration."""
+        # Get instance ID for this task index
+        instance_ids = self.get_task_instance_assignment(self.current_session_id)
+        instance_id = None
+
+        if instance_ids and task_index < len(instance_ids):
+            instance_id = instance_ids[task_index]
+
+        self.launch_task(task_name, instance_id)
+
+    def launch_task(self, task_name: str, instance_id: str = None):
         """Launch the specified task with experiment config."""
         # Map task names to their Python files
         task_files = {
@@ -789,29 +867,28 @@ class ParticipantInterface(ctk.CTk):
 
         # Save experiment config temporarily for the task to use
         temp_config_path = Path("config/current_experiment.json")
-        task_instance_id = None
+        task_instance_id = instance_id
 
         try:
             # If we have an experiment, use its config
             if self.current_experiment:
                 config_to_save = self.current_experiment['config'].copy()
 
-                # Find the task instance ID for this task type
+                # Find the task instance configuration
                 task_instances = config_to_save.get('task_instances', {})
 
-                # Find the first instance of this task type
-                for instance_id, instance in task_instances.items():
-                    if instance.get('task_type') == task_name:
-                        task_instance_id = instance_id
-                        print(f"Found task instance: {instance_id} for {task_name}")
-                        print(f"Instance config: {instance}")
-                        break
+                # If no specific instance ID provided, find the first one for this task type
+                if not task_instance_id:
+                    for inst_id, instance in task_instances.items():
+                        if instance.get('task_type') == task_name:
+                            task_instance_id = inst_id
+                            break
 
-                # Also ensure the legacy format is available
+                # Create a merged config that includes task-specific settings
                 if 'tasks' not in config_to_save:
                     config_to_save['tasks'] = {}
 
-                # Copy instance config to tasks section for compatibility
+                # If we found a task instance, extract its config
                 if task_instance_id and task_instance_id in task_instances:
                     instance = task_instances[task_instance_id]
                     # Extract config (excluding metadata fields)
@@ -819,8 +896,9 @@ class ParticipantInterface(ctk.CTk):
                         k: v for k, v in instance.items()
                         if k not in ['task_type', 'display_name']
                     }
+                    # IMPORTANT: Override the default task config with instance config
                     config_to_save['tasks'][task_name] = instance_config
-                    print(f"Copied instance config to tasks section: {instance_config}")
+                    print(f"Using instance {task_instance_id} config: {instance_config}")
 
             else:
                 # Otherwise, load the default settings
@@ -837,7 +915,7 @@ class ParticipantInterface(ctk.CTk):
                 json.dump(config_to_save, f, indent=2)
 
             print(f"Saved config to: {temp_config_path}")
-            print(f"Config content: {json.dumps(config_to_save, indent=2)}")
+            print(f"Task config content: {json.dumps(config_to_save.get('tasks', {}).get(task_name, {}), indent=2)}")
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save experiment config: {e}")

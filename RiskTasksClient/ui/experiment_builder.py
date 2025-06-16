@@ -36,6 +36,21 @@ class ExperimentBuilder(ctk.CTkFrame):
         # Load experiments
         self.refresh()
 
+    def safe_get_int(self, var: tk.IntVar, default: int) -> int:
+        """Safely get integer value from IntVar, returning default if empty or invalid."""
+        try:
+            value = var.get()
+            return value if value else default
+        except (tk.TclError, ValueError):
+            return default
+
+    def safe_get_string(self, var: tk.StringVar, default: str = "") -> str:
+        """Safely get string value from StringVar."""
+        try:
+            return var.get() or default
+        except tk.TclError:
+            return default
+
     def setup_ui(self):
         """Setup the experiment builder interface."""
         # Title
@@ -376,13 +391,13 @@ class ExperimentBuilder(ctk.CTkFrame):
 
         ctk.CTkLabel(trials_card, text="Trials per Task", font=ctk.CTkFont(weight="bold")).pack(pady=(10, 5))
 
-        # Use validation wrapper
-        self.trials_var = tk.IntVar(value=30)
+        # Use StringVar instead of IntVar for better empty handling
+        self.trials_var = tk.StringVar(value="30")
         trials_entry = ctk.CTkEntry(trials_card, textvariable=self.trials_var, width=100)
         trials_entry.pack(pady=(0, 5))
 
         # Add validation
-        trials_entry.bind('<FocusOut>', lambda e: self.validate_int_entry(self.trials_var, 30, 1, 100, "Trials per task"))
+        trials_entry.bind('<FocusOut>', lambda e: self.validate_int_entry_string(self.trials_var, "30", 1, 100, "Trials per task"))
 
         ctk.CTkLabel(trials_card, text="(1-100)", font=ctk.CTkFont(size=11), text_color="gray").pack(pady=(0, 10))
 
@@ -392,12 +407,12 @@ class ExperimentBuilder(ctk.CTkFrame):
 
         ctk.CTkLabel(gap_card, text="Session Gap (days)", font=ctk.CTkFont(weight="bold")).pack(pady=(10, 5))
 
-        self.gap_var = tk.IntVar(value=14)
+        self.gap_var = tk.StringVar(value="14")
         gap_entry = ctk.CTkEntry(gap_card, textvariable=self.gap_var, width=100)
         gap_entry.pack(pady=(0, 5))
 
         # Add validation - now allows 0 for immediate sessions
-        gap_entry.bind('<FocusOut>', lambda e: self.validate_int_entry(self.gap_var, 14, 0, 365, "Session gap"))
+        gap_entry.bind('<FocusOut>', lambda e: self.validate_int_entry_string(self.gap_var, "14", 0, 365, "Session gap"))
 
         ctk.CTkLabel(gap_card, text="(0 = immediate)", font=ctk.CTkFont(size=11), text_color="gray").pack(pady=(0, 10))
 
@@ -447,6 +462,42 @@ class ExperimentBuilder(ctk.CTkFrame):
 
         params_grid.columnconfigure(0, weight=1)
         params_grid.columnconfigure(1, weight=1)
+
+    def validate_int_entry_string(self, var: tk.StringVar, default: str, min_val: int, max_val: int, field_name: str):
+        """Validate and fix integer entry fields using StringVar."""
+        try:
+            value_str = var.get().strip()
+            if not value_str:  # Empty string
+                var.set(default)
+                return
+
+            value = int(value_str)
+            if value < min_val:
+                var.set(str(min_val))
+                raise ValueError(f"Value too low")
+            elif value > max_val:
+                var.set(str(max_val))
+                raise ValueError(f"Value too high")
+
+        except ValueError as e:
+            # If not a valid integer or out of range
+            if "invalid literal" in str(e):
+                var.set(default)
+
+            # Show friendly message
+            if field_name == "Session gap" and min_val == 0:
+                messagebox.showinfo(
+                    "Input Corrected",
+                    f"{field_name} must be between {min_val} and {max_val} days.\n"
+                    f"Use 0 to allow immediate sessions.\n"
+                    f"Value has been set to {var.get()}."
+                )
+            else:
+                messagebox.showinfo(
+                    "Input Corrected",
+                    f"{field_name} must be between {min_val} and {max_val}.\n"
+                    f"Value has been set to {var.get()}."
+                )
 
     def validate_int_entry(self, var: tk.IntVar, default: int, min_val: int, max_val: int, field_name: str):
         """Validate and fix integer entry fields."""
@@ -912,7 +963,7 @@ class ExperimentBuilder(ctk.CTkFrame):
 
         # Get task instance names
         task_options = [inst['display_name'] for inst in self.task_instances.values()]
-        tasks_per_session = self.tasks_per_session_var.get()
+        tasks_per_session = self.safe_get_int(self.tasks_per_session_var, 2)
 
         # Create dropdowns for 2 sessions
         self.sequence_vars = {}
@@ -990,27 +1041,24 @@ class ExperimentBuilder(ctk.CTkFrame):
 
     def build_experiment_config(self) -> Dict:
         """Build the experiment configuration with task instances."""
-        # Validate and get values with defaults
+        # Validate and get values with defaults - using safe methods
         try:
-            trials_per_task = self.trials_var.get()
+            trials_str = self.trials_var.get().strip()
+            trials_per_task = int(trials_str) if trials_str else 30
             if trials_per_task < 1:
                 trials_per_task = 30
-        except:
+        except (ValueError, tk.TclError):
             trials_per_task = 30
 
         try:
-            session_gap_days = self.gap_var.get()
+            gap_str = self.gap_var.get().strip()
+            session_gap_days = int(gap_str) if gap_str else 14
             if session_gap_days < 0:
                 session_gap_days = 14
-        except:
+        except (ValueError, tk.TclError):
             session_gap_days = 14
 
-        try:
-            tasks_per_session = self.tasks_per_session_var.get()
-            if tasks_per_session < 1:
-                tasks_per_session = 2
-        except:
-            tasks_per_session = 2
+        tasks_per_session = self.safe_get_int(self.tasks_per_session_var, 2)
 
         # Get task instances and their configs
         task_configs = {}
@@ -1081,7 +1129,7 @@ class ExperimentBuilder(ctk.CTkFrame):
             return
 
         # Check if we have enough tasks for the sessions
-        tasks_per_session = self.tasks_per_session_var.get()
+        tasks_per_session = self.safe_get_int(self.tasks_per_session_var, 2)
         if len(self.task_instances) < tasks_per_session:
             messagebox.showerror(
                 "Error",
@@ -1089,11 +1137,11 @@ class ExperimentBuilder(ctk.CTkFrame):
             )
             return
 
-        # Validate numeric fields
+        # Validate numeric fields using safe methods
         try:
             # Force validation
-            self.validate_int_entry(self.trials_var, 30, 1, 100, "Trials per task")
-            self.validate_int_entry(self.gap_var, 14, 0, 365, "Session gap")
+            self.validate_int_entry_string(self.trials_var, "30", 1, 100, "Trials per task")
+            self.validate_int_entry_string(self.gap_var, "14", 0, 365, "Session gap")
         except:
             return
 
@@ -1120,11 +1168,14 @@ class ExperimentBuilder(ctk.CTkFrame):
 
         # Parse max participants
         max_participants = None
-        if self.max_participants_var.get():
+        max_part_str = self.max_participants_var.get().strip()
+        if max_part_str:
             try:
-                max_participants = int(self.max_participants_var.get())
+                max_participants = int(max_part_str)
+                if max_participants < 1:
+                    raise ValueError()
             except ValueError:
-                messagebox.showerror("Error", "Max participants must be a number")
+                messagebox.showerror("Error", "Max participants must be a positive number")
                 return
 
         try:
@@ -1187,9 +1238,9 @@ class ExperimentBuilder(ctk.CTkFrame):
         config = experiment['config']
         exp_config = config.get('experiment', {})
 
-        # Parameters - with validation
-        self.trials_var.set(exp_config.get('total_trials_per_task', 30))
-        self.gap_var.set(exp_config.get('session_gap_days', 14))
+        # Parameters - convert to strings for StringVar
+        self.trials_var.set(str(exp_config.get('total_trials_per_task', 30)))
+        self.gap_var.set(str(exp_config.get('session_gap_days', 14)))
         self.tasks_per_session_var.set(exp_config.get('tasks_per_session', 2))
 
         # Clear existing task instances
@@ -1249,9 +1300,9 @@ class ExperimentBuilder(ctk.CTkFrame):
         self.end_date_var.set("")
         self.max_participants_var.set("")
 
-        # Reset to defaults
-        self.trials_var.set(30)
-        self.gap_var.set(14)
+        # Reset to defaults as strings
+        self.trials_var.set("30")
+        self.gap_var.set("14")
         self.tasks_per_session_var.set(2)
 
         # Clear task instances

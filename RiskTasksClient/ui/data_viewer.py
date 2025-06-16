@@ -1,6 +1,7 @@
 """
-Data Viewer for Risk Tasks Client
+Data Viewer for Risk Tasks Client - Modified Version
 Provides data analysis, visualization, and export functionality.
+Features checkbox-based task selection and simplified analysis options.
 """
 
 import tkinter as tk
@@ -35,6 +36,11 @@ class DataViewer(ctk.CTkFrame):
         self.current_experiment_id = None
         self.current_data = None
         self.view_all_var = tk.BooleanVar(value=False)  # Keep for compatibility
+
+        # Task selection variables
+        self.task_vars = {}
+        for task in TaskType:
+            self.task_vars[task.value] = tk.BooleanVar(value=True)  # All tasks selected by default
 
         # Setup UI
         self.setup_ui()
@@ -143,29 +149,54 @@ class DataViewer(ctk.CTkFrame):
         )
         self.experiment_menu.pack(fill="x")
 
-        # Task filter
+        # Task selection with checkboxes
         task_frame = ctk.CTkFrame(parent)
         task_frame.pack(fill="x", padx=10, pady=10)
 
         task_label = ctk.CTkLabel(
             task_frame,
-            text="Task Filter:",
+            text="Select Tasks:",
+            font=ctk.CTkFont(weight="bold"),
             anchor="w"
         )
         task_label.pack(fill="x", pady=(0, 5))
 
-        self.task_var = tk.StringVar(value="All Tasks")
-        task_values = ["All Tasks"] + [
-            TaskType.get_display_name(task) for task in TaskType
-        ]
-        self.task_menu = ctk.CTkOptionMenu(
-            task_frame,
-            variable=self.task_var,
-            values=task_values,
-            command=self.on_filter_changed,
-            width=200
+        # Checkbox frame
+        checkbox_frame = ctk.CTkFrame(task_frame)
+        checkbox_frame.pack(fill="x", pady=5)
+
+        # Create checkboxes for each task
+        for task in TaskType:
+            checkbox = ctk.CTkCheckBox(
+                checkbox_frame,
+                text=TaskType.get_display_name(task),
+                variable=self.task_vars[task.value],
+                command=self.on_task_selection_changed,
+                width=180
+            )
+            checkbox.pack(anchor="w", pady=2)
+
+        # Select/Deselect all buttons
+        button_frame = ctk.CTkFrame(task_frame)
+        button_frame.pack(fill="x", pady=5)
+
+        select_all_btn = ctk.CTkButton(
+            button_frame,
+            text="Select All",
+            command=self.select_all_tasks,
+            width=80,
+            height=25
         )
-        self.task_menu.pack(fill="x")
+        select_all_btn.pack(side="left", padx=5)
+
+        deselect_all_btn = ctk.CTkButton(
+            button_frame,
+            text="Deselect All",
+            command=self.deselect_all_tasks,
+            width=80,
+            height=25
+        )
+        deselect_all_btn.pack(side="left", padx=5)
 
         # Session filter
         session_frame = ctk.CTkFrame(parent)
@@ -188,7 +219,7 @@ class DataViewer(ctk.CTkFrame):
         )
         self.session_menu.pack(fill="x")
 
-        # Analysis type
+        # Analysis type - simplified to your 3 options
         analysis_frame = ctk.CTkFrame(parent)
         analysis_frame.pack(fill="x", padx=10, pady=10)
 
@@ -202,10 +233,7 @@ class DataViewer(ctk.CTkFrame):
         self.analysis_var = tk.StringVar(value="Risk Profile")
         analysis_values = [
             "Risk Profile",
-            "Actions/Pumps Over Trials",
-            "Points Over Time",
-            "Success Rate",
-            "Task Comparison",
+            "Raw Actions/Pumps",
             "Correlation Matrix"
         ]
         self.analysis_menu = ctk.CTkOptionMenu(
@@ -225,6 +253,30 @@ class DataViewer(ctk.CTkFrame):
             width=200
         )
         refresh_button.pack(pady=20)
+
+    def select_all_tasks(self):
+        """Select all task checkboxes."""
+        for var in self.task_vars.values():
+            var.set(True)
+        self.on_task_selection_changed()
+
+    def deselect_all_tasks(self):
+        """Deselect all task checkboxes."""
+        for var in self.task_vars.values():
+            var.set(False)
+        self.on_task_selection_changed()
+
+    def on_task_selection_changed(self):
+        """Handle task selection changes."""
+        # Check if at least one task is selected
+        if not any(var.get() for var in self.task_vars.values()):
+            messagebox.showwarning("No Tasks Selected", "Please select at least one task")
+            return
+
+        if self.current_participant_id or self.view_all_var.get() or self.current_experiment_id:
+            self.load_data()
+            self.update_visualization()
+            self.update_statistics()
 
     def create_visualization_panel(self, parent):
         """Create the visualization panel."""
@@ -338,6 +390,10 @@ class DataViewer(ctk.CTkFrame):
             width=250
         )
         summary_report_btn.pack(pady=5)
+
+    def get_selected_tasks(self) -> List[str]:
+        """Get list of currently selected tasks."""
+        return [task for task, var in self.task_vars.items() if var.get()]
 
     def refresh(self):
         """Refresh all data and update displays."""
@@ -479,6 +535,7 @@ class DataViewer(ctk.CTkFrame):
     def load_experiment_data(self):
         """Load data for all participants in an experiment."""
         data = []
+        selected_tasks = self.get_selected_tasks()
 
         # Get experiment details
         experiment = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
@@ -505,12 +562,7 @@ class DataViewer(ctk.CTkFrame):
                 trials = self.db_manager.get_session_trials(session['id'])
 
                 # Apply task filter
-                task_filter = self.task_var.get()
-                if task_filter != "All Tasks":
-                    for task_type in TaskType:
-                        if TaskType.get_display_name(task_type) == task_filter:
-                            trials = [t for t in trials if t['task_name'] == task_type.value]
-                            break
+                trials = [t for t in trials if t['task_name'] in selected_tasks]
 
                 for trial in trials:
                     trial_data = {
@@ -556,6 +608,7 @@ class DataViewer(ctk.CTkFrame):
     def load_single_participant_data(self):
         """Load data for a single participant."""
         data = []
+        selected_tasks = self.get_selected_tasks()
 
         sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
 
@@ -569,13 +622,7 @@ class DataViewer(ctk.CTkFrame):
             trials = self.db_manager.get_session_trials(session['id'])
 
             # Apply task filter
-            task_filter = self.task_var.get()
-            if task_filter != "All Tasks":
-                # Convert display name back to task key
-                for task_type in TaskType:
-                    if TaskType.get_display_name(task_type) == task_filter:
-                        trials = [t for t in trials if t['task_name'] == task_type.value]
-                        break
+            trials = [t for t in trials if t['task_name'] in selected_tasks]
 
             for trial in trials:
                 trial_data = {
@@ -618,6 +665,7 @@ class DataViewer(ctk.CTkFrame):
     def load_all_participants_data(self):
         """Load data for all participants."""
         data = []
+        selected_tasks = self.get_selected_tasks()
 
         participants = self.db_manager.get_all_participants()
 
@@ -628,12 +676,7 @@ class DataViewer(ctk.CTkFrame):
                 trials = self.db_manager.get_session_trials(session['id'])
 
                 # Apply task filter
-                task_filter = self.task_var.get()
-                if task_filter != "All Tasks":
-                    for task_type in TaskType:
-                        if TaskType.get_display_name(task_type) == task_filter:
-                            trials = [t for t in trials if t['task_name'] == task_type.value]
-                            break
+                trials = [t for t in trials if t['task_name'] in selected_tasks]
 
                 for trial in trials:
                     trial_data = {
@@ -690,14 +733,8 @@ class DataViewer(ctk.CTkFrame):
 
         if analysis_type == "Risk Profile":
             self.plot_risk_profile()
-        elif analysis_type == "Actions/Pumps Over Trials":
-            self.plot_actions_over_trials()
-        elif analysis_type == "Points Over Time":
-            self.plot_points_over_time()
-        elif analysis_type == "Success Rate":
-            self.plot_success_rate()
-        elif analysis_type == "Task Comparison":
-            self.plot_task_comparison()
+        elif analysis_type == "Raw Actions/Pumps":
+            self.plot_raw_actions()
         elif analysis_type == "Correlation Matrix":
             self.plot_correlation_matrix()
 
@@ -736,11 +773,20 @@ class DataViewer(ctk.CTkFrame):
         ax.set_xlabel('Trial Number', fontsize=12, color='white')
         ax.set_ylabel('Risk Level', fontsize=12, color='white')
 
+        # Create title based on selected tasks
+        selected_tasks = self.get_selected_tasks()
+        if len(selected_tasks) == len(self.task_vars):
+            task_info = "All Tasks"
+        else:
+            task_info = f"{len(selected_tasks)} Tasks"
+
         if view_mode == "Experiment" and self.current_experiment_id:
             exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
-            ax.set_title(f'Risk Profile - {exp["name"]}{title_suffix}', fontsize=14, color='white', pad=20)
+            ax.set_title(f'Risk Profile - {exp["name"]} ({task_info}){title_suffix}',
+                        fontsize=14, color='white', pad=20)
         else:
-            ax.set_title(f'Risk-Taking Profile{title_suffix}', fontsize=14, color='white', pad=20)
+            ax.set_title(f'Risk-Taking Profile ({task_info}){title_suffix}',
+                        fontsize=14, color='white', pad=20)
 
         ax.legend()
         ax.grid(True, alpha=0.3)
@@ -749,23 +795,23 @@ class DataViewer(ctk.CTkFrame):
         # Set y-axis limits
         ax.set_ylim(0, 1.1)
 
-    def plot_actions_over_trials(self):
-        """Plot number of actions/pumps over trials."""
+    def plot_raw_actions(self):
+        """Plot raw number of actions/pumps over trials."""
         ax = self.figure.add_subplot(111)
         ax.set_facecolor('#3b3b3b')
 
         view_mode = self.view_mode_var.get()
 
+        # Filter out rows where actions is None
+        valid_data = self.current_data[self.current_data['actions'].notna()]
+
+        if valid_data.empty:
+            ax.text(0.5, 0.5, 'No action data available\n(This requires trials with additional_data)',
+                    ha='center', va='center', fontsize=14, color='white')
+            return
+
         if view_mode in ["All Participants", "Experiment"]:
             # Plot average actions for multiple participants
-            # Filter out rows where actions is None
-            valid_data = self.current_data[self.current_data['actions'].notna()]
-
-            if valid_data.empty:
-                ax.text(0.5, 0.5, 'No action data available\n(This requires trials with additional_data)',
-                        ha='center', va='center', fontsize=14, color='white')
-                return
-
             avg_actions = valid_data.groupby('trial_number')['actions'].mean()
             std_actions = valid_data.groupby('trial_number')['actions'].std()
 
@@ -781,12 +827,6 @@ class DataViewer(ctk.CTkFrame):
         else:
             # Plot actions for single participant by task
             title_suffix = ""
-            valid_data = self.current_data[self.current_data['actions'].notna()]
-
-            if valid_data.empty:
-                ax.text(0.5, 0.5, 'No action data available\n(This requires trials with additional_data)',
-                        ha='center', va='center', fontsize=14, color='white')
-                return
 
             for task in valid_data['task_name'].unique():
                 task_data = valid_data[valid_data['task_name'] == task]
@@ -796,143 +836,25 @@ class DataViewer(ctk.CTkFrame):
                         marker='o', label=display_name, linewidth=2, markersize=6)
 
         ax.set_xlabel('Trial Number', fontsize=12, color='white')
+        ax.set_ylabel('Number of Actions', fontsize=12, color='white')
 
-        # Set y-label based on task filter
-        task_filter = self.task_var.get()
-        if task_filter == "Balloon Task (BART)":
-            ax.set_ylabel('Number of Pumps', fontsize=12, color='white')
-        elif task_filter == "Ice Fishing":
-            ax.set_ylabel('Fish Caught', fontsize=12, color='white')
-        elif task_filter == "Mountain Mining":
-            ax.set_ylabel('Ore Collected', fontsize=12, color='white')
-        elif task_filter == "Spinning Bottle":
-            ax.set_ylabel('Segments Added', fontsize=12, color='white')
+        # Create title based on selected tasks
+        selected_tasks = self.get_selected_tasks()
+        if len(selected_tasks) == len(self.task_vars):
+            task_info = "All Tasks"
         else:
-            ax.set_ylabel('Number of Actions', fontsize=12, color='white')
+            task_info = f"{len(selected_tasks)} Tasks"
 
         if view_mode == "Experiment" and self.current_experiment_id:
             exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
-            ax.set_title(f'Actions Over Trials - {exp["name"]}{title_suffix}', fontsize=14, color='white', pad=20)
+            ax.set_title(f'Raw Actions/Pumps - {exp["name"]} ({task_info}){title_suffix}',
+                        fontsize=14, color='white', pad=20)
         else:
-            ax.set_title(f'Actions Over Trials{title_suffix}', fontsize=14, color='white', pad=20)
+            ax.set_title(f'Raw Actions/Pumps Over Trials ({task_info}){title_suffix}',
+                        fontsize=14, color='white', pad=20)
 
         ax.legend()
         ax.grid(True, alpha=0.3)
-        ax.tick_params(colors='white')
-
-    def plot_points_over_time(self):
-        """Plot cumulative points over time."""
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor('#3b3b3b')
-
-        view_mode = self.view_mode_var.get()
-
-        if view_mode in ["All Participants", "Experiment"]:
-            # Plot for each participant
-            for participant_id in self.current_data['participant_id'].unique():
-                p_data = self.current_data[self.current_data['participant_id'] == participant_id]
-                p_data = p_data.sort_values('timestamp')
-                cumulative_points = p_data['points_earned'].cumsum()
-
-                label = p_data['participant_code'].iloc[0] if 'participant_code' in p_data else f"P{participant_id}"
-                ax.plot(range(len(cumulative_points)), cumulative_points.values,
-                        alpha=0.7, label=label, linewidth=2)
-        else:
-            # Plot for single participant by task
-            for task in self.current_data['task_name'].unique():
-                task_data = self.current_data[self.current_data['task_name'] == task]
-                task_data = task_data.sort_values('trial_number')
-                cumulative_points = task_data['points_earned'].cumsum()
-
-                display_name = TaskType.get_display_name(TaskType(task))
-                ax.plot(task_data['trial_number'], cumulative_points.values,
-                        marker='o', label=display_name, linewidth=2, markersize=6)
-
-        ax.set_xlabel('Trial Number', fontsize=12, color='white')
-        ax.set_ylabel('Cumulative Points', fontsize=12, color='white')
-
-        if view_mode == "Experiment" and self.current_experiment_id:
-            exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
-            ax.set_title(f'Points Accumulation - {exp["name"]}', fontsize=14, color='white', pad=20)
-        else:
-            ax.set_title('Points Accumulation Over Time', fontsize=14, color='white', pad=20)
-
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        ax.tick_params(colors='white')
-
-    def plot_success_rate(self):
-        """Plot success rate analysis."""
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor('#3b3b3b')
-
-        # Calculate success rates by risk level bins
-        self.current_data['risk_bin'] = pd.cut(self.current_data['risk_level'],
-                                               bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
-                                               labels=['0-20%', '20-40%', '40-60%', '60-80%', '80-100%'])
-
-        success_data = self.current_data.copy()
-        success_data['success'] = (success_data['outcome'] == 'success').astype(int)
-
-        success_by_risk = success_data.groupby('risk_bin')['success'].agg(['mean', 'count'])
-
-        # Plot bar chart
-        x = range(len(success_by_risk))
-        bars = ax.bar(x, success_by_risk['mean'], color='skyblue', edgecolor='white', linewidth=2)
-
-        # Add count labels on bars
-        for i, (bar, count) in enumerate(zip(bars, success_by_risk['count'])):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2., height + 0.02,
-                    f'n={count}', ha='center', va='bottom', color='white', fontsize=10)
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(success_by_risk.index, rotation=0)
-        ax.set_xlabel('Risk Level', fontsize=12, color='white')
-        ax.set_ylabel('Success Rate', fontsize=12, color='white')
-        ax.set_title('Success Rate by Risk Level', fontsize=14, color='white', pad=20)
-        ax.set_ylim(0, 1.1)
-        ax.grid(True, axis='y', alpha=0.3)
-        ax.tick_params(colors='white')
-
-    def plot_task_comparison(self):
-        """Plot comparison across tasks."""
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor('#3b3b3b')
-
-        # Calculate metrics by task
-        task_stats = []
-        for task in self.current_data['task_name'].unique():
-            task_data = self.current_data[self.current_data['task_name'] == task]
-
-            stats = {
-                'task': TaskType.get_display_name(TaskType(task)),
-                'avg_risk': task_data['risk_level'].mean(),
-                'avg_points': task_data['points_earned'].mean(),
-                'success_rate': (task_data['outcome'] == 'success').mean()
-            }
-            task_stats.append(stats)
-
-        if not task_stats:
-            return
-
-        task_df = pd.DataFrame(task_stats)
-
-        # Create grouped bar chart
-        x = np.arange(len(task_df))
-        width = 0.25
-
-        bars1 = ax.bar(x - width, task_df['avg_risk'], width, label='Avg Risk Level', color='coral')
-        bars2 = ax.bar(x, task_df['avg_points'] / 100, width, label='Avg Points (×100)', color='lightgreen')
-        bars3 = ax.bar(x + width, task_df['success_rate'], width, label='Success Rate', color='skyblue')
-
-        ax.set_xlabel('Task', fontsize=12, color='white')
-        ax.set_ylabel('Value', fontsize=12, color='white')
-        ax.set_title('Task Comparison', fontsize=14, color='white', pad=20)
-        ax.set_xticks(x)
-        ax.set_xticklabels(task_df['task'], rotation=45, ha='right')
-        ax.legend()
-        ax.grid(True, axis='y', alpha=0.3)
         ax.tick_params(colors='white')
 
     def plot_correlation_matrix(self):
@@ -955,7 +877,7 @@ class DataViewer(ctk.CTkFrame):
         )
 
         if corr_data.empty or len(corr_data.columns) < 2:
-            ax.text(0.5, 0.5, 'Not enough data for correlation analysis',
+            ax.text(0.5, 0.5, 'Not enough data for correlation analysis\n(Need at least 2 tasks selected)',
                     ha='center', va='center', fontsize=16, color='white')
             ax.set_facecolor('#2b2b2b')
             return
@@ -986,11 +908,20 @@ class DataViewer(ctk.CTkFrame):
                                ha="center", va="center",
                                color="black" if abs(correlation.iloc[i, j]) < 0.5 else "white")
 
+        # Create title based on selected tasks
+        selected_tasks = self.get_selected_tasks()
+        if len(selected_tasks) == len(self.task_vars):
+            task_info = "All Tasks"
+        else:
+            task_info = f"{len(selected_tasks)} Selected Tasks"
+
         if view_mode == "Experiment" and self.current_experiment_id:
             exp = self.db_manager.get_experiment(experiment_id=self.current_experiment_id)
-            ax.set_title(f'Task Correlation Matrix - {exp["name"]}', fontsize=14, color='white', pad=20)
+            ax.set_title(f'Task Correlation Matrix - {exp["name"]} ({task_info})',
+                        fontsize=14, color='white', pad=20)
         else:
-            ax.set_title('Task Correlation Matrix', fontsize=14, color='white', pad=20)
+            ax.set_title(f'Task Correlation Matrix ({task_info})',
+                        fontsize=14, color='white', pad=20)
 
     def update_statistics(self):
         """Update statistics display."""
@@ -1024,6 +955,10 @@ class DataViewer(ctk.CTkFrame):
 
         if 'reaction_time' in self.current_data and self.current_data['reaction_time'].notna().any():
             stats_lines.append(f"Avg Reaction Time: {self.current_data['reaction_time'].mean():.2f}s")
+
+        # Selected tasks info
+        selected_tasks = self.get_selected_tasks()
+        stats_lines.append(f"\nSelected Tasks: {len(selected_tasks)}/{len(self.task_vars)}")
 
         # Task-specific statistics
         stats_lines.append("\n=== Task Statistics ===")
@@ -1178,6 +1113,13 @@ class DataViewer(ctk.CTkFrame):
                         f.write(f"Created: {p_info['created_date']}\n")
                         f.write(f"Notes: {p_info['notes'] or 'None'}\n\n")
 
+                        # Selected tasks info
+                        selected_tasks = self.get_selected_tasks()
+                        f.write(f"Analysis includes {len(selected_tasks)} tasks:\n")
+                        for task in selected_tasks:
+                            f.write(f"  - {TaskType.get_display_name(TaskType(task))}\n")
+                        f.write("\n")
+
                         # Session details
                         f.write("SESSIONS\n")
                         f.write("-" * 30 + "\n")
@@ -1203,6 +1145,13 @@ class DataViewer(ctk.CTkFrame):
                         f.write(f"Status: {'Active' if exp['is_active'] else 'Inactive'}\n")
                         f.write(f"Created: {exp['created_date']}\n\n")
 
+                        # Selected tasks info
+                        selected_tasks = self.get_selected_tasks()
+                        f.write(f"Analysis includes {len(selected_tasks)} tasks:\n")
+                        for task in selected_tasks:
+                            f.write(f"  - {TaskType.get_display_name(TaskType(task))}\n")
+                        f.write("\n")
+
                         f.write("ENROLLMENT STATISTICS\n")
                         f.write("-" * 30 + "\n")
                         f.write(f"Total Participants: {stats['participant_count']}\n")
@@ -1213,12 +1162,13 @@ class DataViewer(ctk.CTkFrame):
                         f.write("-" * 30 + "\n")
 
                         for task_name, task_stats in stats['task_statistics'].items():
-                            display_name = TaskType.get_display_name(TaskType(task_name))
-                            f.write(f"\n{display_name}:\n")
-                            f.write(f"  Trials: {task_stats['trial_count']}\n")
-                            f.write(f"  Avg Risk: {task_stats['avg_risk']:.3f}\n")
-                            f.write(f"  Avg Points: {task_stats['avg_points']:.1f}\n")
-                            f.write(f"  Success Rate: {task_stats['success_rate'] * 100:.1f}%\n")
+                            if task_name in selected_tasks:
+                                display_name = TaskType.get_display_name(TaskType(task_name))
+                                f.write(f"\n{display_name}:\n")
+                                f.write(f"  Trials: {task_stats['trial_count']}\n")
+                                f.write(f"  Avg Risk: {task_stats['avg_risk']:.3f}\n")
+                                f.write(f"  Avg Points: {task_stats['avg_points']:.1f}\n")
+                                f.write(f"  Success Rate: {task_stats['success_rate'] * 100:.1f}%\n")
 
                 messagebox.showinfo("Success", f"Report saved to {filename}")
             except Exception as e:
@@ -1249,16 +1199,24 @@ class DataViewer(ctk.CTkFrame):
                     f.write(f"Active Sessions: {stats['active_sessions']}\n")
                     f.write(f"Total Trials: {stats['total_trials']}\n\n")
 
+                    # Selected tasks info
+                    selected_tasks = self.get_selected_tasks()
+                    f.write(f"Analysis includes {len(selected_tasks)} tasks:\n")
+                    for task in selected_tasks:
+                        f.write(f"  - {TaskType.get_display_name(TaskType(task))}\n")
+                    f.write("\n")
+
                     f.write("TASK STATISTICS\n")
                     f.write("-" * 30 + "\n")
 
                     for task_name, task_data in task_stats.items():
-                        display_name = TaskType.get_display_name(TaskType(task_name))
-                        f.write(f"\n{display_name}:\n")
-                        f.write(f"  Trials: {task_data['trial_count']}\n")
-                        f.write(f"  Avg Risk: {task_data['avg_risk']:.3f}\n")
-                        f.write(f"  Avg Points: {task_data['avg_points']:.1f}\n")
-                        f.write(f"  Success Rate: {task_data['success_rate']:.1%}\n")
+                        if task_name in selected_tasks:
+                            display_name = TaskType.get_display_name(TaskType(task_name))
+                            f.write(f"\n{display_name}:\n")
+                            f.write(f"  Trials: {task_data['trial_count']}\n")
+                            f.write(f"  Avg Risk: {task_data['avg_risk']:.3f}\n")
+                            f.write(f"  Avg Points: {task_data['avg_points']:.1f}\n")
+                            f.write(f"  Success Rate: {task_data['success_rate']:.1%}\n")
 
                 messagebox.showinfo("Success", f"Report saved to {filename}")
             except Exception as e:

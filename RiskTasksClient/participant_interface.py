@@ -1,6 +1,6 @@
 """
 Participant Interface for Risk Tasks Client - FIXED VERSION
-Handles 0 session gap for immediate sessions.
+Handles 0 session gap for immediate sessions and proper experiment task mapping.
 """
 
 import tkinter as tk
@@ -477,6 +477,68 @@ class ParticipantInterface(ctk.CTk):
 
         return True
 
+    def get_actual_task_types_from_experiment(self, experiment: dict, session_number: int) -> list:
+        """Extract actual task types from experiment configuration."""
+        exp_config = experiment['config'].get('experiment', {})
+
+        # Check for fixed sequence first
+        task_sequence = exp_config.get('task_sequence', {})
+        if task_sequence.get('type') == 'fixed':
+            sequences = task_sequence.get('sequences', {})
+            session_key = str(session_number)
+            if session_key in sequences:
+                instance_ids = sequences[session_key]
+                # Map instance IDs to actual task types
+                task_instances = experiment['config'].get('task_instances', {})
+                tasks = []
+                for instance_id in instance_ids:
+                    if instance_id in task_instances:
+                        task_type = task_instances[instance_id].get('task_type')
+                        if task_type:
+                            tasks.append(task_type)
+                return tasks
+
+        # For random assignment or if no sequence found, extract from task instances
+        task_instances = experiment['config'].get('task_instances', {})
+        if task_instances:
+            # Get all unique task types from instances
+            task_types = []
+            for instance in task_instances.values():
+                task_type = instance.get('task_type')
+                if task_type and task_type not in task_types:
+                    task_types.append(task_type)
+
+            # Select tasks based on tasks_per_session
+            tasks_per_session = exp_config.get('tasks_per_session', 2)
+
+            # Get previously assigned tasks for this participant
+            sessions = self.db_manager.get_participant_sessions(self.current_participant_id)
+            assigned_tasks = set()
+            for session in sessions:
+                if session['id'] != self.current_session_id:  # Don't include current session
+                    assigned_tasks.update(session['tasks_assigned'])
+
+            # Filter out already assigned tasks
+            available_tasks = [t for t in task_types if t not in assigned_tasks]
+
+            # If not enough available tasks, something's wrong
+            if len(available_tasks) < tasks_per_session:
+                # Return what we have
+                return available_tasks[:tasks_per_session]
+
+            # Randomly select the required number of tasks
+            import random
+            selected_tasks = random.sample(available_tasks, tasks_per_session)
+            return selected_tasks
+
+        # Fallback to old format if task_instances not found
+        enabled_tasks = exp_config.get('enabled_tasks', [])
+        if enabled_tasks:
+            return enabled_tasks[:exp_config.get('tasks_per_session', 2)]
+
+        # If all else fails, return empty list
+        return []
+
     def start_new_session(self):
         """Start a new session for the current participant with experiment config."""
         if not self.current_participant_id or not self.current_experiment:
@@ -488,43 +550,14 @@ class ParticipantInterface(ctk.CTk):
             session_number = len(sessions) + 1
 
             # Get tasks based on experiment configuration
-            exp_config = self.current_experiment['config'].get('experiment', {})
-            tasks_per_session = exp_config.get('tasks_per_session', 2)
+            tasks = self.get_actual_task_types_from_experiment(self.current_experiment, session_number)
 
-            # Check for fixed sequence
-            task_sequence = exp_config.get('task_sequence', {})
-            if task_sequence.get('type') == 'fixed':
-                # Use predefined sequence
-                sequences = task_sequence.get('sequences', {})
-                tasks = sequences.get(str(session_number), [])
-            else:
-                # Use random assignment with experiment constraints
-                enabled_tasks = exp_config.get('enabled_tasks', None)
-                if enabled_tasks:
-                    # Filter to only enabled tasks
-                    available_tasks = enabled_tasks
-                else:
-                    # Use all tasks
-                    available_tasks = [t.value for t in TaskType]
-
-                # Get previously assigned tasks
-                assigned_tasks = set()
-                for session in sessions:
-                    assigned_tasks.update(session['tasks_assigned'])
-
-                # Select from remaining tasks
-                remaining_tasks = [t for t in available_tasks if t not in assigned_tasks]
-
-                if len(remaining_tasks) < tasks_per_session:
-                    messagebox.showerror(
-                        "Configuration Error",
-                        "Not enough tasks available for this session"
-                    )
-                    return
-
-                # Randomly select tasks
-                import random
-                tasks = random.sample(remaining_tasks, tasks_per_session)
+            if not tasks:
+                messagebox.showerror(
+                    "Configuration Error",
+                    "No tasks configured for this experiment session"
+                )
+                return
 
             # Create session in database with experiment ID
             session_id = self.db_manager.create_session_for_experiment(
